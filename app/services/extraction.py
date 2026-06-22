@@ -92,7 +92,23 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
                 else:
                     txn["payee"] = ""
 
-        # 3. Mark completed and save results
+        # 3. Classify payees as person/merchant
+        from app.services.merchant_classifier import MerchantClassifierService
+
+        classifier = MerchantClassifierService.get_instance()
+        if classifier.available:
+            payee_names = [txn.get("payee", "") for txn in transactions]
+            classifications = classifier.classify_batch(payee_names)
+            for txn, cls_result in zip(transactions, classifications):
+                txn["payee_type"] = cls_result["label"]
+                txn["payee_confidence"] = cls_result["confidence"]
+        else:
+            logger.warning("Merchant classifier not available — skipping classification")
+            for txn in transactions:
+                txn["payee_type"] = None
+                txn["payee_confidence"] = None
+
+        # 4. Mark completed and save results
         update_task_status(task_id, "completed", transactions=transactions)
 
     except Exception as e:
