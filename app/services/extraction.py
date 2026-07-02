@@ -99,7 +99,7 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
         if classifier.available:
             payee_names = [txn.get("payee", "") for txn in transactions]
             classifications = classifier.classify_batch(payee_names)
-            for txn, cls_result in zip(transactions, classifications):
+            for txn, cls_result in zip(transactions, classifications, strict=False):
                 txn["payee_type"] = cls_result["label"]
                 txn["payee_confidence"] = cls_result["confidence"]
         else:
