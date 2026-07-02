@@ -107,7 +107,7 @@ class MerchantClassifierService:
         """Whether the classifier is ready to use."""
         return self._available
 
-    def _embed(self, name: str) -> np.ndarray:
+    def _embed(self, name: str) -> np.ndarray[Any, Any]:
         """Generate L2-normalized embedding for a single name."""
         inputs = self._tokenizer(
             name,
@@ -116,7 +116,7 @@ class MerchantClassifierService:
             truncation=True,
             max_length=32,
         )
-        embedding: np.ndarray = self._embedding_session.run(
+        embedding: np.ndarray[Any, Any] = self._embedding_session.run(
             None,
             {
                 "input_ids": inputs["input_ids"],
