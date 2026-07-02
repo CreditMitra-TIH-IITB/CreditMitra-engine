@@ -61,7 +61,7 @@ def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
         df.columns = [str(c).strip().lower() for c in df.columns]
         df = df.fillna("")
 
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             rec = {
                 "date": str(row.get("date", "")).strip(),
                 "particulars": normalize_narration(str(row.get("particulars", ""))),
@@ -99,7 +99,7 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
         if classifier.available:
             payee_names = [txn.get("payee", "") for txn in transactions]
             classifications = classifier.classify_batch(payee_names)
-            for txn, cls_result in zip(transactions, classifications):
+            for txn, cls_result in zip(transactions, classifications, strict=False):
                 txn["payee_type"] = cls_result["label"]
                 txn["payee_confidence"] = cls_result["confidence"]
         else:
