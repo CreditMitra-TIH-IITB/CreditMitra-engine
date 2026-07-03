@@ -35,6 +35,12 @@ async def upload_statement(
     async with await anyio.open_file(file_path, "wb") as f:
         await f.write(content)
 
+    def write_file(path: str, data: bytes) -> None:
+        with open(path, "wb") as f:
+            f.write(data)
+
+    await asyncio.to_thread(write_file, file_path, content)
+
     # Initialize task state
     await asyncio.to_thread(update_task_status, task_id, "pending")
 
