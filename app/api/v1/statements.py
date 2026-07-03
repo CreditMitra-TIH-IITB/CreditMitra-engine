@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
+import anyio
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
 from app.core.config import settings
@@ -31,12 +32,8 @@ async def upload_statement(
     file_path = os.path.join(settings.DATA_DIR, "uploads", f"{task_id}{suffix}")
 
     content = await pdf.read()
-
-    def write_file(path: str, data: bytes) -> None:
-        with open(path, "wb") as f:
-            f.write(data)
-
-    await asyncio.to_thread(write_file, file_path, content)
+    async with await anyio.open_file(file_path, "wb") as f:
+        await f.write(content)
 
     # Initialize task state
     await asyncio.to_thread(update_task_status, task_id, "pending")
