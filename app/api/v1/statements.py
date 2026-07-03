@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -35,7 +36,7 @@ async def upload_statement(
         await f.write(content)
 
     # Initialize task state
-    update_task_status(task_id, "pending")
+    await asyncio.to_thread(update_task_status, task_id, "pending")
 
     # Dispatch background job
     background_tasks.add_task(process_pdf_task, task_id, file_path)
@@ -50,7 +51,7 @@ async def upload_statement(
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_processing_status(task_id: str) -> TaskStatusResponse:
     """Check the status of a background processing task."""
-    task_data = get_task(task_id)
+    task_data = await asyncio.to_thread(get_task, task_id)
     if not task_data:
         raise HTTPException(status_code=404, detail="Task not found")
 

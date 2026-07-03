@@ -61,7 +61,7 @@ def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
         df.columns = [str(c).strip().lower() for c in df.columns]
         df = df.fillna("")
 
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             rec = {
                 "date": str(row.get("date", "")).strip(),
                 "particulars": normalize_narration(str(row.get("particulars", ""))),
