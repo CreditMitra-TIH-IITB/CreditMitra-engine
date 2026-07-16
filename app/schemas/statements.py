@@ -1,18 +1,180 @@
-from pydantic import BaseModel
+"""Pydantic contracts for CreditMitra.
 
+ISSUE #1 — FROZEN after merge. Every other track codes against these.
+Additive only: existing Transaction fields are untouched so extraction.py and
+the dashboard keep working.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+# ---------------------------------------------------------------------------
+# Taxonomy value types (see docs/taxonomy.md — Issue #4)
+# ---------------------------------------------------------------------------
+
+RiskFlag = Literal["gambling", "bnpl_lending", "crypto"]
+LifestyleDim = Literal[
+    "essential",     # feeds L1
+    "aspirational",  # feeds L2
+    "commitment",    # feeds L4
+    "leverage",      # feeds L5
+    "risk",          # feeds L6
+    "neutral",       # feeds none
+]
+RecurringType = Literal[
+    "adhoc",          # one-off
+    "subscription",   # OTT, gym, telecom plan
+    "emi_like",       # loan EMI, rent, insurance premium
+    "payout_source",  # gig platform paying the USER (a credit) -> Gig Hustler
+]
+Direction = Literal["credit", "debit"]
+ScoreBlock = Literal["cashflow", "lifestyle"]
+
+
+# ---------------------------------------------------------------------------
+# Transaction  (EXTENDED — original fields unchanged)
+# ---------------------------------------------------------------------------
 
 class Transaction(BaseModel):
-    date: str
-    particulars: str
-    deposits: str
-    withdrawals: str
-    balance: str
-    payee: str | None = None
-    payee_type: str | None = None  # "person" or "merchant"
-    payee_confidence: float | None = None  # 0.0-1.0
+    """One statement row.
+
+    Original string fields come straight from Docling. The parsed/enrichment
+    fields are populated later in the pipeline and are all optional so a
+    partially-processed transaction is still a valid Transaction.
+    """
+
+    # --- original (Docling output) ---
+    date: str = ""
+    particulars: str = ""
+    deposits: str = ""
+    withdrawals: str = ""
+    balance: str = ""
+
+    # --- payee extraction (DP SLM) + classification (ONNX) ---
+    payee: str = ""
+    payee_type: str | None = None          # "person" | "merchant"
+    payee_confidence: float | None = None
+
+    # --- parsed numerics (Issue #5) ---
+    txn_date: date | None = None
+    amount: float | None = None
+    direction: Direction | None = None
+    balance_val: float | None = None
+
+    # --- merchant enrichment (Issue #7) ---
+    category: str | None = None
+    is_essential: bool | None = None
+    risk_flag: RiskFlag | None = None
+    lifestyle_dim: LifestyleDim | None = None
+    recurring_type: RecurringType | None = None
 
 
-class TaskResponse(BaseModel):
+# ---------------------------------------------------------------------------
+# Merchant enrichment  (Issue #7 / #7b — also the merchant-server contract)
+# ---------------------------------------------------------------------------
+
+class MerchantEnrichment(BaseModel):
+    """What a merchant lookup returns. The ONLY thing that crosses the
+    device boundary is the merchant NAME (see docs/enrichment_api.md)."""
+
+    canonical_name: str = Field(description="Clean merchant name, e.g. 'Swiggy'")
+    category: str = Field(description="One value from docs/taxonomy.md")
+    is_essential: bool = Field(description="Counts toward L1 Essential Stability")
+    risk_flag: RiskFlag | None = Field(
+        default=None, description="gambling | bnpl_lending | crypto | null"
+    )
+    lifestyle_dim: LifestyleDim = Field(description="Which L-index this feeds")
+    recurring_type: RecurringType = Field(description="Recurrence pattern")
+
+    @classmethod
+    def unknown(cls, name: str) -> "MerchantEnrichment":
+        """Safe default. Every failure path returns this — never raise,
+        never block the pipeline."""
+        return cls(
+            canonical_name=name,
+            category="other",
+            is_essential=False,
+            risk_flag=None,
+            lifestyle_dim="neutral",
+            recurring_type="adhoc",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Risk brain  (Track B — Issues #10-#13)
+# ---------------------------------------------------------------------------
+
+class FeatureVector(BaseModel):
+    """Cash-flow features. Output of build_features(transactions)."""
+
+    salary_detected: bool = False
+    monthly_income: float = 0.0
+    foir: float = 0.0                      # fixed obligations / income
+    net_cashflow: float = 0.0
+    balance_buffer_days: float = 0.0
+
+    essential_ratio: float = 0.0
+    discretionary_ratio: float = 0.0
+    cash_withdrawal_ratio: float = 0.0
+    merchant_resolution_rate: float = 0.0  # share of debits with a resolved merchant
+
+    bounce_count: int = 0
+    bnpl_merchant_count: int = 0
+    bnpl_share: float = 0.0
+    gambling_share: float = 0.0
+
+    months_covered: int = 0
+    txn_count: int = 0
+
+
+class LifestyleProfile(BaseModel):
+    """The core IP. All indices 0-100. See RESEARCH_LIFESTYLE_CREDIT.md §2."""
+
+    l1_essential_stability: int = 0
+    l2_aspirational: int = 0
+    l3_digital_maturity: int = 0
+    l4_commitment: int = 0        # the self-control proxy — most important
+    l5_leverage: int = 0          # inverse: high = LOW leverage
+    l6_risk_appetite: int = 0     # inverse: high = LOW risk appetite
+
+    # behavioural texture (Gladstone et al., EPJ Data Science 2021)
+    category_diversity: float = 0.0   # normalized entropy
+    merchant_loyalty: float = 0.0     # repeat-merchant txn share
+    burstiness: float = 0.0           # Goh-Barabasi B = (sigma-mu)/(sigma+mu)
+    category_turnover: float = 0.0    # new categories per month
+
+    archetype: str = "unknown"
+
+
+class ScoreFactor(BaseModel):
+    """One human-readable reason for points gained/lost."""
+
+    factor: str        # "Commitment Index 78 — sustained SIP + insurance + rent"
+    impact: int        # signed points, e.g. +45
+    block: ScoreBlock
+
+
+class CreditRiskReport(BaseModel):
+    """The deliverable. Rendered by LifestyleReport.tsx (Issue #17)."""
+
+    score: int = Field(ge=300, le=900)
+    band: str                       # Poor | Fair | Good | Very Good | Excellent
+    archetype: str
+    factors: list[ScoreFactor] = Field(default_factory=list)
+    lifestyle: LifestyleProfile
+    features: FeatureVector
+    narrative: str = ""             # one-line summary for the archetype card
+
+
+# ---------------------------------------------------------------------------
+# API responses
+# ---------------------------------------------------------------------------
+
+class ProcessResponse(BaseModel):
     task_id: str
     status: str
     message: str
@@ -20,6 +182,7 @@ class TaskResponse(BaseModel):
 
 class TaskStatusResponse(BaseModel):
     task_id: str
-    status: str  # "pending", "processing", "completed", "failed"
+    status: str
     transactions: list[Transaction] | None = None
+    report: CreditRiskReport | None = None   # NEW — populated after scoring
     error: str | None = None
