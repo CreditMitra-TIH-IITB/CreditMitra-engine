@@ -25,7 +25,15 @@ ENV/
 htmlcov/
 
 # ─── Runtime Data (tasks & uploads) ──────────────────────
-data/
+# NOT a blanket `data/` — that also swallowed data/india_merchants.json,
+# static reference data the app needs at runtime (Issue #6), not runtime
+# output. Ignore only what's actually generated/heavy: the ONNX classifier
+# models (~2.3GB), task state blobs, temp upload PDFs, and the SQLite
+# enrichment cache (regenerable — see app/services/merchant_enrichment.py).
+data/models/
+data/tasks/
+data/uploads/
+data/enrichment_cache.db
 
 # ─── Environment / Secrets ───────────────────────────────
 .env

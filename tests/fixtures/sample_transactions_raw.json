@@ -1,0 +1,51 @@
+[
+  {
+    "date": "01-10-2025",
+    "particulars": "",
+    "deposits": "Opening Balance",
+    "withdrawals": "",
+    "balance": "21,500.00"
+  },
+  {
+    "date": "01-10-2025",
+    "particulars": "UPI/CR/500123456789/ACME SOFTWARE PVT LTD/SALARY OCT",
+    "deposits": "62,000.00",
+    "withdrawals": "",
+    "balance": "83,500.00"
+  },
+  {
+    "date": "02-10-2025",
+    "particulars": "Chq: 740828843104",
+    "deposits": "",
+    "withdrawals": "",
+    "balance": "83,500.00"
+  },
+  {
+    "date": "02-10-2025",
+    "particulars": "Chq: 740828843104 UPI/DR/101899321560/IRCTCT OUR/HDFC/irctc@hdfcbank/Tatkal Booking",
+    "deposits": "",
+    "withdrawals": "1,240.00",
+    "balance": "82,260.00"
+  },
+  {
+    "date": "03-10-2025",
+    "particulars": "UPI/DR/500123456791/LIC OF INDIA/PREMIUM",
+    "deposits": "",
+    "withdrawals": "4,200.00",
+    "balance": "78,060.00"
+  },
+  {
+    "date": "05-10-2025",
+    "particulars": "UPI/DR/500123456793/BIGBASKET/GROCERY ORDER",
+    "deposits": "",
+    "withdrawals": "3,200.00",
+    "balance": "74,860.00"
+  },
+  {
+    "date": "31-10-2025",
+    "particulars": "",
+    "deposits": "Closing Balance",
+    "withdrawals": "",
+    "balance": "74,860.00"
+  }
+]

@@ -73,16 +73,16 @@ def parse_amount(s: str | None) -> float | None:
 # Order matters: most specific / most common first. dd before mm throughout —
 # Indian statements are day-first, never US month-first.
 _DATE_FORMATS = (
-    "%d-%m-%Y",     # 05-11-2025   (Canara)
-    "%d/%m/%Y",     # 05/11/2025
-    "%d-%m-%y",     # 05-11-25
-    "%d/%m/%y",     # 01/11/25     (HDFC)
-    "%d-%b-%Y",     # 06-Nov-2025
-    "%d-%b-%y",     # 06-Nov-25
-    "%d %b %Y",     # 06 Nov 2025
-    "%d %b %y",     # 06 Nov 25
-    "%d-%B-%Y",     # 06-November-2025
-    "%Y-%m-%d",     # 2025-11-06   (ISO, just in case)
+    "%d-%m-%Y",  # 05-11-2025   (Canara)
+    "%d/%m/%Y",  # 05/11/2025
+    "%d-%m-%y",  # 05-11-25
+    "%d/%m/%y",  # 01/11/25     (HDFC)
+    "%d-%b-%Y",  # 06-Nov-2025
+    "%d-%b-%y",  # 06-Nov-25
+    "%d %b %Y",  # 06 Nov 2025
+    "%d %b %y",  # 06 Nov 25
+    "%d-%B-%Y",  # 06-November-2025
+    "%Y-%m-%d",  # 2025-11-06   (ISO, just in case)
 )
 
 _DATE_CLEAN_RE = re.compile(r"[^\dA-Za-z\-/ ]")
@@ -110,6 +110,7 @@ def parse_date(s: str | None) -> date | None:
 # ---------------------------------------------------------------------------
 # Direction
 # ---------------------------------------------------------------------------
+
 
 def derive_direction(
     deposits: str | None,
@@ -154,9 +155,7 @@ def derive_direction_from_type(type_str: str | None) -> Direction | None:
 # Row filtering  (extraction hardening — see below)
 # ---------------------------------------------------------------------------
 
-_SUMMARY_ROW_RE = re.compile(
-    r"^\s*(opening|closing)\s+balance\s*$", re.IGNORECASE
-)
+_SUMMARY_ROW_RE = re.compile(r"^\s*(opening|closing)\s+balance\s*$", re.IGNORECASE)
 # Canara emits standalone "Chq: 101895374870" rows and also prepends the
 # previous row's ref into the next row's particulars. Both produce garbage
 # payees ("ABC Bank Ltd" hallucinations) if sent to the SLM.
@@ -185,9 +184,7 @@ def is_junk_row(row: dict) -> bool:
     particulars = str(row.get("particulars", "") or "").strip()
     if not particulars:
         return True
-    if _CHQ_ONLY_RE.match(particulars):
-        return True
-    return False
+    return bool(_CHQ_ONLY_RE.match(particulars))
 
 
 def strip_chq_artifacts(narration: str) -> str:

@@ -8,7 +8,7 @@ import anyio
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
 from app.core.config import settings
-from app.schemas.statements import TaskResponse, TaskStatusResponse
+from app.schemas.statements import ReportResponse, TaskResponse, TaskStatusResponse
 from app.services.extraction import process_pdf_task
 from app.services.task_store import get_task, update_task_status
 
@@ -50,9 +50,25 @@ async def upload_statement(
 
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_processing_status(task_id: str) -> TaskStatusResponse:
-    """Check the status of a background processing task."""
+    """Extraction page: task status + transactions with payee/merchant
+    classification. Never carries the lifestyle report — see /report."""
     task_data = await asyncio.to_thread(get_task, task_id)
     if not task_data:
         raise HTTPException(status_code=404, detail="Task not found")
 
     return TaskStatusResponse(**task_data)
+
+
+@router.get("/report/{task_id}", response_model=ReportResponse)
+async def get_report(task_id: str) -> ReportResponse:
+    """Report page: just the lifestyle/credit-risk report for a task.
+
+    404 only when the task itself doesn't exist. A task that exists but
+    hasn't finished (or finished with scoring silently failed — Issue #14)
+    returns 200 with `report: null`; check `status` to tell those apart.
+    """
+    task_data = await asyncio.to_thread(get_task, task_id)
+    if not task_data:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    return ReportResponse(**task_data)

@@ -1,0 +1,63 @@
+{
+  "score": 712,
+  "band": "Good",
+  "archetype": "Gig Hustler",
+  "factors": [
+    {
+      "factor": "Digital Maturity 82 — 100% of inflow and outflow is digital, zero cash withdrawals",
+      "impact": 22,
+      "block": "lifestyle"
+    },
+    {
+      "factor": "Commitment Index 38 — no SIP, insurance, or rent detected in 2 months of history",
+      "impact": -18,
+      "block": "lifestyle"
+    },
+    {
+      "factor": "Essential Stability 61 — telecom and groceries paid consistently despite irregular income",
+      "impact": 14,
+      "block": "lifestyle"
+    },
+    {
+      "factor": "Income irregularity — 3 different gig-platform payout sources, no single employer",
+      "impact": -10,
+      "block": "cashflow"
+    },
+    {
+      "factor": "Positive net cashflow across both months tracked",
+      "impact": 12,
+      "block": "cashflow"
+    }
+  ],
+  "lifestyle": {
+    "l1_essential_stability": 61,
+    "l2_aspirational": 55,
+    "l3_digital_maturity": 82,
+    "l4_commitment": 38,
+    "l5_leverage": 88,
+    "l6_risk_appetite": 92,
+    "category_diversity": 0.61,
+    "merchant_loyalty": 0.44,
+    "burstiness": 0.21,
+    "category_turnover": 1.5,
+    "archetype": "Gig Hustler"
+  },
+  "features": {
+    "salary_detected": false,
+    "monthly_income": 6975.0,
+    "foir": 0.0,
+    "net_cashflow": 13950.0,
+    "balance_buffer_days": 24.0,
+    "essential_ratio": 0.18,
+    "discretionary_ratio": 0.12,
+    "cash_withdrawal_ratio": 0.0,
+    "merchant_resolution_rate": 1.0,
+    "bounce_count": 0,
+    "bnpl_merchant_count": 0,
+    "bnpl_share": 0.0,
+    "gambling_share": 0.0,
+    "months_covered": 2,
+    "txn_count": 14
+  },
+  "narrative": "Income comes from gig-platform payouts rather than a single employer, but spending stays disciplined and fully digital — the profile a salary-only score would miss entirely."
+}

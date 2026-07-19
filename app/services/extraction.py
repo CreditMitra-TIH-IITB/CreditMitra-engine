@@ -8,6 +8,19 @@ import httpx
 from docling.document_converter import DocumentConverter
 
 from app.core.config import settings
+from app.schemas.statements import Transaction
+from app.services.archetype import classify_archetype
+from app.services.credit_scorer import score
+from app.services.feature_engineering import build_features
+from app.services.lifestyle_profile import build_profile
+from app.services.merchant_enrichment import get_enrichment_service
+from app.services.parsing import (
+    derive_direction,
+    is_junk_row,
+    parse_amount,
+    parse_date,
+    strip_chq_artifacts,
+)
 from app.services.task_store import update_task_status
 
 logger = logging.getLogger(__name__)
@@ -62,15 +75,28 @@ def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
         df = df.fillna("")
 
         for row in df.to_dict("records"):
+            particulars_raw = normalize_narration(str(row.get("particulars", "")))
             rec = {
                 "date": str(row.get("date", "")).strip(),
-                "particulars": normalize_narration(str(row.get("particulars", ""))),
+                "particulars": particulars_raw,
                 "deposits": str(row.get("deposits", "")).strip(),
                 "withdrawals": str(row.get("withdrawals", "")).strip(),
                 "balance": str(row.get("balance", "")).strip(),
             }
-            if not any(rec.values()):
+            # is_junk_row must see the ORIGINAL particulars (incl. any "Chq: <ref>"
+            # bleed) — that's exactly the pattern it's matching on. Strip after.
+            if not any(rec.values()) or is_junk_row(rec):
                 continue
+            rec["particulars"] = strip_chq_artifacts(particulars_raw)
+
+            txn_date = parse_date(rec["date"])
+            rec["txn_date"] = txn_date.isoformat() if txn_date else None
+
+            direction_amount = derive_direction(rec["deposits"], rec["withdrawals"])
+            rec["direction"], rec["amount"] = direction_amount if direction_amount else (None, None)
+
+            rec["balance_val"] = parse_amount(rec["balance"])
+
             rows.append(rec)
     return rows
 
@@ -108,8 +134,38 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
                 txn["payee_type"] = None
                 txn["payee_confidence"] = None
 
-        # 4. Mark completed and save results
-        update_task_status(task_id, "completed", transactions=transactions)
+        # 4. Enrich merchant payees (Issue #7 / #7b) — cache -> dictionary -> LLM.
+        # Only merchant-classified payees are sent; enrich() never raises.
+        merchant_names = [
+            txn.get("payee", "") for txn in transactions if txn.get("payee_type") == "merchant"
+        ]
+        if merchant_names:
+            enrichments = iter(get_enrichment_service().enrich(merchant_names))
+            for txn in transactions:
+                if txn.get("payee_type") == "merchant":
+                    enrichment = next(enrichments)
+                    txn["category"] = enrichment.category
+                    txn["is_essential"] = enrichment.is_essential
+                    txn["risk_flag"] = enrichment.risk_flag
+                    txn["lifestyle_dim"] = enrichment.lifestyle_dim
+                    txn["recurring_type"] = enrichment.recurring_type
+
+        # 5. Score (Track B, Issues #10-13): build_features -> build_profile ->
+        # classify_archetype -> score. Never allowed to fail the whole task —
+        # a report is a nice-to-have on top of the transactions, not a
+        # precondition for "completed".
+        report_payload = None
+        try:
+            txn_models = [Transaction(**txn) for txn in transactions]
+            features = build_features(txn_models)
+            profile = build_profile(txn_models, features)
+            archetype = classify_archetype(features, profile)
+            report_payload = score(features, profile, archetype).model_dump()
+        except Exception as exc:
+            logger.warning("Scoring failed for task %s: %s", task_id, exc)
+
+        # 6. Mark completed and save results
+        update_task_status(task_id, "completed", transactions=transactions, report=report_payload)
 
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}")
