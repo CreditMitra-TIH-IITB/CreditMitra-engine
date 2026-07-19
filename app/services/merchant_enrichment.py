@@ -42,9 +42,10 @@ import re
 import sqlite3
 import threading
 from pathlib import Path
+from typing import Any
 
 from app.core.config import settings
-from app.schemas.statements import MerchantEnrichment
+from app.schemas.statements import LifestyleDim, MerchantEnrichment, RiskFlag
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ _CACHE_PATH = _BASE_DIR / "data" / "enrichment_cache.db"
 # valid values, individually, that are still a wrong taxonomy pairing.
 # _coerce() derives is_essential/lifestyle_dim/risk_flag from category here;
 # only category and recurring_type are actually trusted from the model.
-_CATEGORY_TAXONOMY: dict[str, tuple[bool, str, str | None]] = {
+_CATEGORY_TAXONOMY: dict[str, tuple[bool, LifestyleDim, RiskFlag | None]] = {
     # category: (is_essential, lifestyle_dim, risk_flag)
     "groceries": (True, "essential", None),
     "utilities": (True, "essential", None),
@@ -397,8 +398,12 @@ class _LLMFallback:
     """
 
     def __init__(self) -> None:
-        self._summary_chain = None
-        self._category_chain = None
+        # Typed Any, not Optional[Runnable] — a LangChain `|`-composed chain's
+        # real type is a deep generic (RunnableSequence[...]) not worth
+        # spelling out here; Any also sidesteps spurious "None has no
+        # attribute invoke" errors once _build() has actually run.
+        self._summary_chain: Any = None
+        self._category_chain: Any = None
         self._failed = False
         self._search = _WebSearch()
 
@@ -477,7 +482,7 @@ class _LLMFallback:
         return _coerce(result, name)
 
 
-def _coerce(result, name: str) -> MerchantEnrichment:
+def _coerce(result: Any, name: str) -> MerchantEnrichment:
     """Validate LLM output against the taxonomy, and derive the fields that
     aren't actually the model's to decide.
 
@@ -491,6 +496,10 @@ def _coerce(result, name: str) -> MerchantEnrichment:
     try:
         if isinstance(result, dict):
             result = MerchantEnrichment(**result)
+        if not isinstance(result, MerchantEnrichment):
+            # Chain returned something we don't recognize at all — never
+            # trust an unknown shape, fall back to the safe default.
+            return MerchantEnrichment.unknown(name)
         if result.category not in _CATEGORY_TAXONOMY or result.recurring_type not in _VALID_RECUR:
             logger.info("LLM returned off-taxonomy values for %r — coercing", name)
             return MerchantEnrichment.unknown(name)

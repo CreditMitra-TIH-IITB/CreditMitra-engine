@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 Direction = Literal["credit", "debit"]
 
@@ -164,7 +164,7 @@ _CHQ_PREFIX_RE = re.compile(r"^\s*Chq:\s*\d+\s+", re.IGNORECASE)
 _CHQ_SUFFIX_RE = re.compile(r"\s+Chq:\s*\d+\s*$", re.IGNORECASE)
 
 
-def is_summary_row(row: dict) -> bool:
+def is_summary_row(row: dict[str, Any]) -> bool:
     """Opening/Closing Balance rows — note Canara puts the LABEL in the
     deposits column, not particulars, so checking particulars alone misses it.
     """
@@ -175,7 +175,7 @@ def is_summary_row(row: dict) -> bool:
     return False
 
 
-def is_junk_row(row: dict) -> bool:
+def is_junk_row(row: dict[str, Any]) -> bool:
     """Rows with no real narration — orphan 'Chq: <ref>' lines, empty rows.
     These must never reach the payee model; it hallucinates bank names.
     """

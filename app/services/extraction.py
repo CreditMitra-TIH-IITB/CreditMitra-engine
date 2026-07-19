@@ -76,7 +76,7 @@ def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
 
         for row in df.to_dict("records"):
             particulars_raw = normalize_narration(str(row.get("particulars", "")))
-            rec = {
+            rec: dict[str, Any] = {
                 "date": str(row.get("date", "")).strip(),
                 "particulars": particulars_raw,
                 "deposits": str(row.get("deposits", "")).strip(),
