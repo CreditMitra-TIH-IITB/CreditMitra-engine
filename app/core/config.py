@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     LANGSEARCH_API_KEY: str = ""
     ENRICHMENT_WEBSEARCH_TIMEOUT: float = 8.0
 
+    # Standalone Merchant Server
+    MERCHANT_ENRICHMENT_URL: str = os.getenv("MERCHANT_ENRICHMENT_URL", "")
+    MERCHANT_API_KEY: str = os.getenv("MERCHANT_API_KEY", "")
+
     # Local Data Storage for background tasks
     DATA_DIR: str = os.getenv("DATA_DIR", "./data")
 

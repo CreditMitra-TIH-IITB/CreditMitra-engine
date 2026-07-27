@@ -554,6 +554,14 @@ class MerchantEnrichmentService:
 
     def enrich(self, names: list[str]) -> list[MerchantEnrichment]:
         """Batch, order-preserving. Deduped so 6 IRCTC rows = 1 lookup."""
+        if not names:
+            return []
+        if getattr(settings, "MERCHANT_ENRICHMENT_URL", None):
+            from app.services.merchant_enrichment_client import enrich_merchants_via_http
+            http_res = enrich_merchants_via_http(names)
+            if http_res is not None:
+                return http_res
+
         unique = {normalize_name(n): n for n in names}
         resolved = {norm: self.enrich_one(orig) for norm, orig in unique.items()}
         return [resolved[normalize_name(n)] for n in names]
