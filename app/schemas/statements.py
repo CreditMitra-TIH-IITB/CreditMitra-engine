@@ -193,13 +193,12 @@ class TaskResponse(BaseModel):
 
 class TaskStatusResponse(BaseModel):
     """Extraction-page shape: task status + transactions with payee/merchant
-    classification. Deliberately does NOT carry the lifestyle report — see
-    ReportResponse. Splitting these means the extraction page never waits on
-    (or pays the payload size of) scoring data it doesn't show."""
+    classification + optional credit risk report if available."""
 
     task_id: str
     status: str
     transactions: list[Transaction] | None = None
+    report: CreditRiskReport | None = None
     error: str | None = None
 
 
