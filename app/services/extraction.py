@@ -187,17 +187,13 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
         from app.services.merchant_classifier import MerchantClassifierService
 
         classifier = MerchantClassifierService.get_instance()
-        if classifier.available:
-            payee_names = [txn.get("payee", "") for txn in transactions]
-            classifications = classifier.classify_batch(payee_names)
-            for txn, cls_result in zip(transactions, classifications, strict=False):
-                txn["payee_type"] = cls_result["label"]
-                txn["payee_confidence"] = cls_result["confidence"]
-        else:
-            logger.warning("Merchant classifier not available — skipping classification")
-            for txn in transactions:
-                txn["payee_type"] = None
-                txn["payee_confidence"] = None
+        payee_targets = [
+            txn.get("payee") or txn.get("particulars", "") for txn in transactions
+        ]
+        classifications = classifier.classify_batch(payee_targets)
+        for txn, cls_result in zip(transactions, classifications, strict=False):
+            txn["payee_type"] = cls_result["label"]
+            txn["payee_confidence"] = cls_result["confidence"]
 
         # 4. Enrich merchant payees (Issue #7 / #7b) — cache -> dictionary -> LLM.
         merchant_names = [
