@@ -5,7 +5,10 @@ import re
 from typing import Any
 
 import httpx
-from docling.document_converter import DocumentConverter
+import pdfplumber
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
 
 from app.core.config import settings
 from app.schemas.statements import Transaction
@@ -64,8 +67,40 @@ def normalize_narration(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
-    converter = DocumentConverter()
+def _process_extracted_row(
+    date_val: str,
+    particulars_raw: str,
+    deposits_val: str,
+    withdrawals_val: str,
+    balance_val: str,
+) -> dict[str, Any] | None:
+    rec: dict[str, Any] = {
+        "date": str(date_val).strip(),
+        "particulars": particulars_raw,
+        "deposits": str(deposits_val).strip(),
+        "withdrawals": str(withdrawals_val).strip(),
+        "balance": str(balance_val).strip(),
+    }
+    if not any(rec.values()) or is_junk_row(rec):
+        return None
+    rec["particulars"] = strip_chq_artifacts(particulars_raw)
+
+    txn_date = parse_date(rec["date"])
+    rec["txn_date"] = txn_date.isoformat() if txn_date else None
+
+    direction_amount = derive_direction(rec["deposits"], rec["withdrawals"])
+    rec["direction"], rec["amount"] = direction_amount if direction_amount else (None, None)
+
+    rec["balance_val"] = parse_amount(rec["balance"])
+    return rec
+
+
+def _extract_with_docling(pdf_path: str) -> list[dict[str, Any]]:
+    # Disable heavy OCR image rendering on multi-page PDFs to prevent std::bad_alloc out of memory crashes
+    opts = PdfPipelineOptions(do_ocr=False)
+    converter = DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
+    )
     result = converter.convert(pdf_path)
 
     rows: list[dict[str, Any]] = []
@@ -75,30 +110,60 @@ def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
         df = df.fillna("")
 
         for row in df.to_dict("records"):
-            particulars_raw = normalize_narration(str(row.get("particulars", "")))
-            rec: dict[str, Any] = {
-                "date": str(row.get("date", "")).strip(),
-                "particulars": particulars_raw,
-                "deposits": str(row.get("deposits", "")).strip(),
-                "withdrawals": str(row.get("withdrawals", "")).strip(),
-                "balance": str(row.get("balance", "")).strip(),
-            }
-            # is_junk_row must see the ORIGINAL particulars (incl. any "Chq: <ref>"
-            # bleed) — that's exactly the pattern it's matching on. Strip after.
-            if not any(rec.values()) or is_junk_row(rec):
-                continue
-            rec["particulars"] = strip_chq_artifacts(particulars_raw)
+            date_val = str(row.get("date", "")).strip()
+            particulars_raw = normalize_narration(
+                str(row.get("particulars", row.get("narration", row.get("description", ""))))
+            )
+            deposits_val = str(row.get("deposits", row.get("credit", row.get("deposit", "")))).strip()
+            withdrawals_val = str(row.get("withdrawals", row.get("debit", row.get("withdrawal", "")))).strip()
+            balance_val = str(row.get("balance", "")).strip()
 
-            txn_date = parse_date(rec["date"])
-            rec["txn_date"] = txn_date.isoformat() if txn_date else None
-
-            direction_amount = derive_direction(rec["deposits"], rec["withdrawals"])
-            rec["direction"], rec["amount"] = direction_amount if direction_amount else (None, None)
-
-            rec["balance_val"] = parse_amount(rec["balance"])
-
-            rows.append(rec)
+            rec = _process_extracted_row(date_val, particulars_raw, deposits_val, withdrawals_val, balance_val)
+            if rec:
+                rows.append(rec)
     return rows
+
+
+def _extract_with_pdfplumber(pdf_path: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables()
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                header = [str(col or "").strip().lower() for col in table[0]]
+                for row_data in table[1:]:
+                    if not row_data:
+                        continue
+                    row_dict = {
+                        header[i]: str(row_data[i] or "").strip()
+                        for i in range(min(len(header), len(row_data)))
+                    }
+                    date_val = str(row_dict.get("date", "")).strip()
+                    particulars_raw = normalize_narration(
+                        str(row_dict.get("particulars", row_dict.get("narration", row_dict.get("description", ""))))
+                    )
+                    deposits_val = str(row_dict.get("deposits", row_dict.get("credit", row_dict.get("deposit", "")))).strip()
+                    withdrawals_val = str(row_dict.get("withdrawals", row_dict.get("debit", row_dict.get("withdrawal", "")))).strip()
+                    balance_val = str(row_dict.get("balance", "")).strip()
+
+                    rec = _process_extracted_row(date_val, particulars_raw, deposits_val, withdrawals_val, balance_val)
+                    if rec:
+                        rows.append(rec)
+    return rows
+
+
+def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
+    try:
+        return _extract_with_docling(pdf_path)
+    except Exception as e:
+        logger.warning(f"Docling extraction failed ({e}), using pdfplumber fallback...")
+        try:
+            return _extract_with_pdfplumber(pdf_path)
+        except Exception as fallback_err:
+            logger.error(f"pdfplumber extraction also failed: {fallback_err}")
+            raise e
 
 
 def process_pdf_task(task_id: str, pdf_path: str) -> None:
@@ -106,7 +171,7 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
     try:
         update_task_status(task_id, "processing")
 
-        # 1. Extract tables via Docling
+        # 1. Extract tables via Docling (with pdfplumber fallback)
         transactions = extract_transactions(pdf_path)
 
         # 2. Enrich via Ollama
@@ -135,43 +200,46 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
                 txn["payee_confidence"] = None
 
         # 4. Enrich merchant payees (Issue #7 / #7b) — cache -> dictionary -> LLM.
-        # Only merchant-classified payees are sent; enrich() never raises.
         merchant_names = [
             txn.get("payee", "") for txn in transactions if txn.get("payee_type") == "merchant"
         ]
-        if merchant_names:
-            enrichments = iter(get_enrichment_service().enrich(merchant_names))
-            for txn in transactions:
-                if txn.get("payee_type") == "merchant":
-                    enrichment = next(enrichments)
-                    txn["category"] = enrichment.category
-                    txn["is_essential"] = enrichment.is_essential
-                    txn["risk_flag"] = enrichment.risk_flag
-                    txn["lifestyle_dim"] = enrichment.lifestyle_dim
-                    txn["recurring_type"] = enrichment.recurring_type
+        enrichment_service = get_enrichment_service()
+        enrichments = enrichment_service.enrich(merchant_names)
+        enrich_iter = iter(enrichments)
 
-        # 5. Score (Track B, Issues #10-13): build_features -> build_profile ->
-        # classify_archetype -> score. Never allowed to fail the whole task —
-        # a report is a nice-to-have on top of the transactions, not a
-        # precondition for "completed".
-        report_payload = None
-        try:
-            txn_models = [Transaction(**txn) for txn in transactions]
-            features = build_features(txn_models)
-            profile = build_profile(txn_models, features)
+        for txn in transactions:
+            if txn.get("payee_type") == "merchant":
+                e = next(enrich_iter)
+                txn["category"] = e.category
+                txn["is_essential"] = e.is_essential
+                txn["risk_flag"] = e.risk_flag
+                txn["lifestyle_dim"] = e.lifestyle_dim
+                txn["recurring_type"] = e.recurring_type
+            else:
+                txn["category"] = None
+                txn["is_essential"] = None
+                txn["risk_flag"] = None
+                txn["lifestyle_dim"] = None
+                txn["recurring_type"] = None
+
+        # 5. Score (Track B — Issues #10-#13)
+        report = None
+        with contextlib.suppress(Exception):
+            tx_models = [Transaction(**t) for t in transactions]
+            features = build_features(tx_models)
+            profile = build_profile(tx_models, features)
             archetype = classify_archetype(features, profile)
-            report_payload = score(features, profile, archetype).model_dump()
-        except Exception as exc:
-            logger.warning("Scoring failed for task %s: %s", task_id, exc)
+            report = score(features, profile, archetype)
 
-        # 6. Mark completed and save results
-        update_task_status(task_id, "completed", transactions=transactions, report=report_payload)
+        # 6. Save results to task store
+        report_data = report.model_dump(mode="json") if report else None
+        update_task_status(
+            task_id,
+            "completed",
+            transactions=transactions,
+            report=report_data,
+        )
 
     except Exception as e:
-        logger.error(f"Task {task_id} failed: {e}")
+        logger.error(f"Task {task_id} failed: {e}", exc_info=True)
         update_task_status(task_id, "failed", error=str(e))
-    finally:
-        # Cleanup temp file
-        if os.path.exists(pdf_path):
-            with contextlib.suppress(Exception):
-                os.unlink(pdf_path)
