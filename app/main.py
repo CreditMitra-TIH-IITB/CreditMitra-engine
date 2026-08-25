@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,14 +13,20 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Set up CORS for React frontend (Vite defaults to 5173)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "tauri://localhost"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Set up CORS for the React frontend. Origins come from CORS_ORIGINS so that a
+# LAN or Tauri host can be added without widening this to a wildcard: Starlette
+# echoes the caller's origin back, so a permissive regex plus credentials would
+# let any site make credentialed calls to a user's local engine.
+_cors_kwargs: dict[str, Any] = {
+    "allow_origins": settings.cors_origin_list,
+    "allow_credentials": False,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if settings.CORS_ORIGIN_REGEX:
+    _cors_kwargs["allow_origin_regex"] = settings.CORS_ORIGIN_REGEX
+
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 app.include_router(
     statements.router, prefix=f"{settings.API_V1_STR}/statements", tags=["statements"]

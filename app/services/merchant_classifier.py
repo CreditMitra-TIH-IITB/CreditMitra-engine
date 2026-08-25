@@ -108,7 +108,8 @@ class MerchantClassifierService:
             logger.info("MerchantClassifierService initialized ONNX model successfully")
         except Exception as e:
             logger.warning(
-                f"ONNX merchant classifier unavailable ({e}). Using dictionary + heuristic fallback."
+                f"ONNX merchant classifier unavailable ({e}). "
+                "Using dictionary + heuristic fallback."
             )
 
     def _load_models(self) -> None:
@@ -124,10 +125,13 @@ class MerchantClassifierService:
         if not os.path.isdir(tokenizer_dir):
             raise FileNotFoundError(f"Tokenizer directory not found: {tokenizer_dir}")
 
-        from transformers import AutoTokenizer
         import onnxruntime as ort
+        from transformers import AutoTokenizer
 
-        self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir, trust_remote_code=True)
+        # transformers ships no type stubs, so strict mode flags this as untyped.
+        self._tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
+            tokenizer_dir, trust_remote_code=True
+        )
         self._embedding_session = ort.InferenceSession(
             embedding_path, providers=["CPUExecutionProvider"]
         )

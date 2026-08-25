@@ -8,11 +8,14 @@ errored.
 from __future__ import annotations
 
 import logging
+
 import httpx
+
 from app.core.config import settings
 from app.schemas.statements import MerchantEnrichment
 
 logger = logging.getLogger(__name__)
+
 
 def enrich_merchants_via_http(merchant_names: list[str]) -> list[MerchantEnrichment] | None:
     if not settings.MERCHANT_ENRICHMENT_URL or not merchant_names:
@@ -33,5 +36,7 @@ def enrich_merchants_via_http(merchant_names: list[str]) -> list[MerchantEnrichm
             results = data.get("results", [])
             return [MerchantEnrichment(**item) for item in results]
     except Exception as e:
-        logger.warning(f"HTTP merchant enrichment failed ({url}): {e}. Falling back to local resolver.")
+        logger.warning(
+            f"HTTP merchant enrichment failed ({url}): {e}. Falling back to local resolver."
+        )
         return None

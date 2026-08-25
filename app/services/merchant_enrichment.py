@@ -558,6 +558,7 @@ class MerchantEnrichmentService:
             return []
         if getattr(settings, "MERCHANT_ENRICHMENT_URL", None):
             from app.services.merchant_enrichment_client import enrich_merchants_via_http
+
             http_res = enrich_merchants_via_http(names)
             if http_res is not None:
                 return http_res

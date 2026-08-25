@@ -20,7 +20,10 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "httpx>=0.26.0",
     "python-multipart>=0.0.9",
+    "anyio>=4.0.0",
     "docling>=1.0.0",
+    # Fallback table extraction when Docling fails on a PDF
+    "pdfplumber>=0.11.0",
     # Merchant classification (ONNX pipeline)
     "onnxruntime>=1.17.0",
     "transformers>=4.40.0",
@@ -29,6 +32,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Enrichment tier 3 (local LLM). Imported lazily, so the engine runs without it.
+llm = [
+    "langchain-core>=0.3.0",
+    "langchain-ollama>=0.2.0",
+]
 dev = [
     "ruff>=0.1.14",
     "mypy>=1.8.0",

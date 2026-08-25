@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     MERCHANT_ENRICHMENT_URL: str = os.getenv("MERCHANT_ENRICHMENT_URL", "")
     MERCHANT_API_KEY: str = os.getenv("MERCHANT_API_KEY", "")
 
+    # CORS: comma-separated origins allowed to call the engine. The engine is a
+    # local sidecar, so this stays an explicit allow-list rather than a wildcard.
+    CORS_ORIGINS: str = os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,tauri://localhost",
+    )
+    # Optional escape hatch for LAN testing, e.g. r"http://192\.168\.\d+\.\d+:5173"
+    CORS_ORIGIN_REGEX: str = os.getenv("CORS_ORIGIN_REGEX", "")
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
     # Local Data Storage for background tasks
     DATA_DIR: str = os.getenv("DATA_DIR", "./data")
 

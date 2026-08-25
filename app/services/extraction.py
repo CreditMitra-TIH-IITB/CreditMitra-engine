@@ -1,6 +1,5 @@
 import contextlib
 import logging
-import os
 import re
 from typing import Any
 
@@ -96,7 +95,8 @@ def _process_extracted_row(
 
 
 def _extract_with_docling(pdf_path: str) -> list[dict[str, Any]]:
-    # Disable heavy OCR image rendering on multi-page PDFs to prevent std::bad_alloc out of memory crashes
+    # Disable heavy OCR image rendering on multi-page PDFs to prevent
+    # std::bad_alloc out-of-memory crashes.
     opts = PdfPipelineOptions(do_ocr=False)
     converter = DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
@@ -114,11 +114,17 @@ def _extract_with_docling(pdf_path: str) -> list[dict[str, Any]]:
             particulars_raw = normalize_narration(
                 str(row.get("particulars", row.get("narration", row.get("description", ""))))
             )
-            deposits_val = str(row.get("deposits", row.get("credit", row.get("deposit", "")))).strip()
-            withdrawals_val = str(row.get("withdrawals", row.get("debit", row.get("withdrawal", "")))).strip()
+            deposits_val = str(
+                row.get("deposits", row.get("credit", row.get("deposit", "")))
+            ).strip()
+            withdrawals_val = str(
+                row.get("withdrawals", row.get("debit", row.get("withdrawal", "")))
+            ).strip()
             balance_val = str(row.get("balance", "")).strip()
 
-            rec = _process_extracted_row(date_val, particulars_raw, deposits_val, withdrawals_val, balance_val)
+            rec = _process_extracted_row(
+                date_val, particulars_raw, deposits_val, withdrawals_val, balance_val
+            )
             if rec:
                 rows.append(rec)
     return rows
@@ -142,13 +148,28 @@ def _extract_with_pdfplumber(pdf_path: str) -> list[dict[str, Any]]:
                     }
                     date_val = str(row_dict.get("date", "")).strip()
                     particulars_raw = normalize_narration(
-                        str(row_dict.get("particulars", row_dict.get("narration", row_dict.get("description", ""))))
+                        str(
+                            row_dict.get(
+                                "particulars",
+                                row_dict.get("narration", row_dict.get("description", "")),
+                            )
+                        )
                     )
-                    deposits_val = str(row_dict.get("deposits", row_dict.get("credit", row_dict.get("deposit", "")))).strip()
-                    withdrawals_val = str(row_dict.get("withdrawals", row_dict.get("debit", row_dict.get("withdrawal", "")))).strip()
+                    deposits_val = str(
+                        row_dict.get(
+                            "deposits", row_dict.get("credit", row_dict.get("deposit", ""))
+                        )
+                    ).strip()
+                    withdrawals_val = str(
+                        row_dict.get(
+                            "withdrawals", row_dict.get("debit", row_dict.get("withdrawal", ""))
+                        )
+                    ).strip()
                     balance_val = str(row_dict.get("balance", "")).strip()
 
-                    rec = _process_extracted_row(date_val, particulars_raw, deposits_val, withdrawals_val, balance_val)
+                    rec = _process_extracted_row(
+                        date_val, particulars_raw, deposits_val, withdrawals_val, balance_val
+                    )
                     if rec:
                         rows.append(rec)
     return rows
@@ -163,7 +184,9 @@ def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
             return _extract_with_pdfplumber(pdf_path)
         except Exception as fallback_err:
             logger.error(f"pdfplumber extraction also failed: {fallback_err}")
-            raise e
+            # Surface the original Docling failure, but keep the fallback's
+            # traceback attached so both causes are visible.
+            raise e from fallback_err
 
 
 def process_pdf_task(task_id: str, pdf_path: str) -> None:
@@ -187,9 +210,7 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
         from app.services.merchant_classifier import MerchantClassifierService
 
         classifier = MerchantClassifierService.get_instance()
-        payee_targets = [
-            txn.get("payee") or txn.get("particulars", "") for txn in transactions
-        ]
+        payee_targets = [txn.get("payee") or txn.get("particulars", "") for txn in transactions]
         classifications = classifier.classify_batch(payee_targets)
         for txn, cls_result in zip(transactions, classifications, strict=False):
             txn["payee_type"] = cls_result["label"]
