@@ -21,6 +21,7 @@ from app.schemas.statements import FeatureVector, LifestyleProfile
 
 BALANCED = "Balanced"
 GAMBLER = "Gambler"
+OVEREXTENDED = "Overextended"
 BNPL_HEAVY_SPENDER = "BNPL-Heavy Spender"
 CASH_RELIANT_INFORMAL = "Cash-Reliant Informal"
 GIG_HUSTLER = "Gig Hustler"
@@ -37,13 +38,28 @@ def classify_archetype(features: FeatureVector, lifestyle: LifestyleProfile) -> 
     if lifestyle.l6_risk_appetite < 40:
         return GAMBLER
 
-    # 2. BNPL-Heavy Spender — L5 inverse leverage index bottomed out by
+    # 2. Overextended — payments are bouncing on a recurring basis. This is the
+    # one archetype driven by cash-flow evidence rather than a lifestyle index:
+    # the profile can look entirely unremarkable (no gambling, no BNPL, ordinary
+    # categories) and still be the clearest credit risk in the set. Without it
+    # such a statement fell through to BALANCED, which is the same label an
+    # unremarkable *healthy* profile gets — the two are not the same thing.
+    # Rate-based rather than a raw count, so a six-month statement and a
+    # twelve-month one are judged on the same footing.
+    if (
+        features.bounce_count >= 2
+        and features.months_covered > 0
+        and features.bounce_count / features.months_covered >= 0.5
+    ):
+        return OVEREXTENDED
+
+    # 3. BNPL-Heavy Spender — L5 inverse leverage index bottomed out by
     # buy-now-pay-later usage. Hidden debt the person may not think of as
     # debt (docs/taxonomy.md).
     if lifestyle.l5_leverage < 40:
         return BNPL_HEAVY_SPENDER
 
-    # 3. Cash-Reliant Informal — low digital maturity: heavy ATM reliance,
+    # 4. Cash-Reliant Informal — low digital maturity: heavy ATM reliance,
     # little resolvable digital spend. Checked before Gig Hustler because
     # both can show salary_detected=False; digital maturity is what tells
     # them apart (a gig worker is fully digital, an informal-cash earner
@@ -51,7 +67,7 @@ def classify_archetype(features: FeatureVector, lifestyle: LifestyleProfile) -> 
     if lifestyle.l3_digital_maturity < 60:
         return CASH_RELIANT_INFORMAL
 
-    # 4. Gig Hustler — no formal employer salary, but real recurring
+    # 5. Gig Hustler — no formal employer salary, but real recurring
     # income exists (gig-platform payouts, reinterpreted in
     # feature_engineering.py), and the person transacts entirely digitally.
     if (
@@ -61,14 +77,14 @@ def classify_archetype(features: FeatureVector, lifestyle: LifestyleProfile) -> 
     ):
         return GIG_HUSTLER
 
-    # 5. Aspirational Overspender — docs/taxonomy.md: L2 (aspirational
+    # 6. Aspirational Overspender — docs/taxonomy.md: L2 (aspirational
     # spend level) is "neutral alone; risky only w/ low buffer". High
     # discretionary spend only earns this label when the balance runway is
     # actually thin.
     if lifestyle.l2_aspirational >= 70 and features.balance_buffer_days < 30:
         return ASPIRATIONAL_OVERSPENDER
 
-    # 6. Salaried Saver — detected formal income, sustained voluntary
+    # 7. Salaried Saver — detected formal income, sustained voluntary
     # commitments, low leverage/risk. The profile the traditional scoring
     # model already rewards.
     if features.salary_detected and lifestyle.l4_commitment >= 50 and lifestyle.l5_leverage >= 70:

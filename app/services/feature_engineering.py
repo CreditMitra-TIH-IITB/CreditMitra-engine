@@ -40,10 +40,43 @@ _BOUNCE_RE = re.compile(
     r"\bINSUFFICIENT\s*FUND|\bUNPAID\b|\bDISHONO[UR]*R",
     re.IGNORECASE,
 )
+_RENT_RE = re.compile(r"\bRENT\b|\bHOUSE\s*RENT\b|\bLANDLORD\b", re.IGNORECASE)
 
-_EMI_LIKE_RECURRING = {"emi_like"}
 _ASPIRATIONAL_DIM = "aspirational"
-_ESSENTIAL_DIM = "essential"
+
+# Fixed obligations for FOIR. Deliberately NOT every `emi_like` row: a SIP is
+# tagged emi_like because it recurs like one, but money moving into savings is
+# not an obligation against income. It still counts toward L4 as a voluntary
+# commitment — that's a different question about character, not affordability.
+_OBLIGATION_CATEGORIES = {"loan_emi", "insurance", "bnpl_lending"}
+
+
+def is_rent(t: Transaction) -> bool:
+    """Rent is the largest fixed obligation most Indian renters carry, and it is
+    almost always paid to a private landlord — a person, so `payee_type` is
+    never "merchant" and no enrichment tier can ever resolve it. Like ATM
+    withdrawals and bounces, the narration is the only place the signal exists.
+
+    Without this the category stays None, and rent falls out of the essential
+    share, out of FOIR, and out of L4 — which is how a six-month statement with
+    rent paid on the 2nd every month used to produce a commitment index of 3.
+    """
+    return t.direction == "debit" and bool(_RENT_RE.search(t.particulars or ""))
+
+
+def is_obligation(t: Transaction) -> bool:
+    """Rows that count against income for FOIR."""
+    return is_rent(t) or t.category in _OBLIGATION_CATEGORIES
+
+
+def is_essential_spend(t: Transaction) -> bool:
+    """The schema is explicit that `is_essential` is the field that "Counts
+    toward L1 Essential Stability", so read that rather than inferring it from
+    `lifestyle_dim` — the two disagree for exactly the rows that matter most.
+    Insurance, for instance, is essential but its lifestyle_dim is `commitment`
+    because it feeds L4."""
+    return t.is_essential is True or is_rent(t)
+
 
 # Relative amount tolerance for treating two credits as "the same recurring
 # payment" (salary, gig payout) rather than coincidentally similar amounts.
@@ -160,13 +193,11 @@ def build_features(transactions: list[Transaction]) -> FeatureVector:
     total_credit_all = sum(t.amount for t in credits if t.amount is not None)
     net_cashflow = total_credit_all - total_debit
 
-    emi_like_debit = sum(
-        t.amount for t in debits if t.amount is not None and t.recurring_type in _EMI_LIKE_RECURRING
-    )
-    foir = _safe_div(emi_like_debit, monthly_income * max(months_covered, 1))
+    obligation_debit = sum(t.amount for t in debits if t.amount is not None and is_obligation(t))
+    foir = _safe_div(obligation_debit, monthly_income * max(months_covered, 1))
 
     essential_debit = sum(
-        t.amount for t in debits if t.amount is not None and t.lifestyle_dim == _ESSENTIAL_DIM
+        t.amount for t in debits if t.amount is not None and is_essential_spend(t)
     )
     discretionary_debit = sum(
         t.amount for t in debits if t.amount is not None and t.lifestyle_dim == _ASPIRATIONAL_DIM

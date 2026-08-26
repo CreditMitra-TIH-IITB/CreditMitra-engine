@@ -25,7 +25,6 @@ _LIFESTYLE_LABELS: dict[str, str] = {
     "l5_leverage": "Leverage Index",
     "l6_risk_appetite": "Risk Appetite Index",
     "l3_digital_maturity": "Digital Maturity",
-    "l2_aspirational": "Aspirational Index",
 }
 
 _NARRATIVES: dict[str, str] = {
@@ -41,6 +40,11 @@ _NARRATIVES: dict[str, str] = {
     "BNPL-Heavy Spender": (
         "Multiple buy-now-pay-later apps carry a meaningful share of spend — "
         "debt that doesn't show up as a loan but behaves like one."
+    ),
+    "Overextended": (
+        "Payments are bouncing on a recurring basis. Nothing in the spending "
+        "pattern stands out — the risk is simply that the money isn't there "
+        "when obligations fall due."
     ),
     "Gambler": (
         "A significant share of spend goes to gambling and/or crypto platforms, "
@@ -62,17 +66,47 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
-def _lifestyle_block(lifestyle: LifestyleProfile) -> tuple[float, list[ScoreFactor]]:
+def _aspirational_strain(
+    lifestyle: LifestyleProfile, features: FeatureVector
+) -> tuple[float, ScoreFactor | None]:
+    """L2's contribution: nothing at all unless discretionary spend is high AND
+    the balance runway behind it is short. Scaled by both overshoots, so a big
+    spender with a deep buffer is untouched and a big spender living on fumes
+    takes the full hit."""
+    over_index = lifestyle.l2_aspirational - cfg.ASPIRATIONAL_STRAIN_INDEX
+    under_buffer = cfg.ASPIRATIONAL_STRAIN_BUFFER_DAYS - features.balance_buffer_days
+    if over_index <= 0 or under_buffer <= 0:
+        return 0.0, None
+
+    index_severity = min(over_index / (100 - cfg.ASPIRATIONAL_STRAIN_INDEX), 1.0)
+    buffer_severity = min(under_buffer / cfg.ASPIRATIONAL_STRAIN_BUFFER_DAYS, 1.0)
+    impact = -cfg.ASPIRATIONAL_STRAIN_MAX_PENALTY * index_severity * buffer_severity
+    return impact, ScoreFactor(
+        factor=(
+            f"Discretionary spend is high (Aspirational {lifestyle.l2_aspirational}) "
+            f"against only ~{features.balance_buffer_days:.0f} days of buffer"
+        ),
+        impact=round(impact),
+        block="lifestyle",
+    )
+
+
+def _lifestyle_block(
+    lifestyle: LifestyleProfile, features: FeatureVector
+) -> tuple[float, list[ScoreFactor]]:
     """docs/taxonomy.md: "Σ weightᵢ × (Lᵢ − 50)/50 × max_pointsᵢ". max_points
-    already IS weight_i × 300 (the column sums to exactly 300 — the whole
-    block's budget) — it's not a separate factor to multiply in again. Using
-    `weight * (L-50)/50 * max_points` double-applies the weight and crushes
-    every index's swing to ~30% of its intended size."""
+    already IS weight_i × the block budget — it's not a separate factor to
+    multiply in again. Using `weight * (L-50)/50 * max_points` double-applies
+    the weight and crushes every index's swing to ~30% of its intended size."""
     factors: list[ScoreFactor] = []
     total = 0.0
-    for field, (_weight, max_points) in cfg.LIFESTYLE_WEIGHTS.items():
+    for field, (neutral, max_gain, max_penalty) in cfg.LIFESTYLE_WEIGHTS.items():
         value: int = getattr(lifestyle, field)
-        impact = (value - 50) / 50 * max_points
+        if value >= neutral:
+            headroom = max(100 - neutral, 1)
+            impact = (value - neutral) / headroom * max_gain
+        else:
+            impact = (value - neutral) / max(neutral, 1) * max_penalty
         total += impact
         if abs(impact) >= 3:
             label = _LIFESTYLE_LABELS[field]
@@ -84,6 +118,12 @@ def _lifestyle_block(lifestyle: LifestyleProfile) -> tuple[float, list[ScoreFact
                     block="lifestyle",
                 )
             )
+
+    strain, strain_factor = _aspirational_strain(lifestyle, features)
+    total += strain
+    if strain_factor is not None:
+        factors.append(strain_factor)
+
     return total, factors
 
 
@@ -192,7 +232,7 @@ def score(features: FeatureVector, lifestyle: LifestyleProfile, archetype: str) 
     # lifestyle_profile.py's.
     lifestyle.archetype = archetype
 
-    lifestyle_points, lifestyle_factors = _lifestyle_block(lifestyle)
+    lifestyle_points, lifestyle_factors = _lifestyle_block(lifestyle, features)
     cashflow_points, cashflow_factors = _cashflow_block(features)
 
     raw_score = cfg.BASE_SCORE + lifestyle_points + cashflow_points

@@ -106,19 +106,48 @@ stores the debit meaning; `feature_engineering.py` (#10) reinterprets on
 
 ## Scorecard weights (initial — team review)
 
-Lifestyle block, `Σ weightᵢ × (Lᵢ − 50)/50 × max_pointsᵢ`, ~±300 total:
+Lifestyle block. Each index scores against **its own neutral anchor**, not a
+shared 50, and gains and penalties are sized separately:
 
-| Index | weight | max_points | rationale |
-|---|---:|---:|---|
-| L4 Commitment | 0.30 | 90 | strongest character signal (EPJ 2021) |
-| L1 Essential Stability | 0.20 | 60 | spending persistence |
-| L5 Leverage (inv) | 0.20 | 60 | hidden BNPL debt |
-| L6 Risk Appetite (inv) | 0.15 | 45 | gambling/crypto |
-| L3 Digital Maturity | 0.10 | 30 | our unique signal |
-| L2 Aspirational | 0.05 | 15 | neutral alone; risky only w/ low buffer |
+```
+L >= neutral:  impact = (L − neutral) / (100 − neutral) × max_gain
+L <  neutral:  impact = (L − neutral) / neutral         × max_penalty
+```
+
+| Index | neutral | max_gain | max_penalty | rationale |
+|---|---:|---:|---:|---|
+| L4 Commitment | 50 | 72 | 72 | strongest character signal (EPJ 2021) |
+| L1 Essential Stability | 50 | 52 | 52 | spending persistence |
+| L5 Leverage (inv) | 85 | 20 | 90 | hidden BNPL debt |
+| L6 Risk Appetite (inv) | 85 | 15 | 90 | gambling/crypto |
+| L3 Digital Maturity | 60 | 24 | 50 | our unique signal |
+
+**Why the anchors differ.** L5 and L6 are inverse indices: they read 100 for
+anyone who simply has no BNPL app and places no bets, which is most people.
+Anchoring them at 50 paid out ~+90 for the mere absence of two vices, which was
+enough to float a statement with eight bounced payments into "Very Good". They
+are anchored at 85 with a small upside and a heavy downside, which is how an
+underwriter reads them — no gambling is expected, heavy gambling is
+disqualifying. L4 and L1 stay symmetric at 50, because sustained commitments and
+essential stability are positive evidence in their own right.
+
+**L2 is not in the table.** It measures the *share* of spend that is
+discretionary, which is not a "higher is better" quantity — scored on the same
+ramp it awarded points for overspending. It is now a conditional penalty
+(`ASPIRATIONAL_STRAIN_*`) that applies only when a high L2 coincides with a thin
+balance buffer, which is what "neutral alone; risky only w/ low buffer" meant.
 
 Cash-flow block (~±300): FOIR, salary regularity, balance buffer, bounces,
 overdrafts. Values live in `scoring_config.py` (#13) — **nowhere else**.
+
+FOIR counts rent, loan EMIs, insurance and BNPL dues — *not* SIPs. A SIP recurs
+like an EMI and is tagged `emi_like`, but money moving into savings is not an
+obligation against income. It still counts toward L4, which asks a different
+question.
+
+The bounce penalty is 35 points per event with a floor of −180, so it keeps
+biting past the second one; at the previous −80 floor, two bounces and eight
+bounces cost exactly the same.
 
 Bands: <580 Poor · 580-669 Fair · 670-739 Good · 740-799 Very Good · 800+ Excellent
 

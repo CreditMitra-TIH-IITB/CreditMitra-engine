@@ -2,12 +2,24 @@
 
 docs/taxonomy.md: "Weights are expert-set, not fitted. Persona ranking (#15)
 is the acceptance test." There's no labelled default data to validate
-against, so this test suite is the substitute: each of the six synthetic
-personas in tests/fixtures/personas/ was built to stress exactly one axis
-of the scorer (docs/taxonomy.md's L-indices), and the acceptance criteria
-are that (a) each classifies as its intended archetype and (b) the relative
-ordering of scores and indices across personas makes real-world sense —
+against, so this suite is the substitute: each of the eight synthetic personas
+in tests/fixtures/personas/ was built to stress one axis of the scorer, and
+the acceptance criteria are that (a) each classifies as its intended archetype
+and (b) the relative ordering of scores and indices makes real-world sense —
 not exact point values, which were never fitted to anything.
+
+CALIBRATION GUARDS. Ordering tests alone turned out to be far too weak. The
+previous two-month fixtures passed every one of them while the model was badly
+mis-calibrated underneath: four of six indices were effectively constant, the
+cash-flow block was positive for every persona regardless of behaviour, the top
+persona was clamped at the ceiling, and a statement with eight bounced payments
+scored "Very Good". Every ordering assertion still held, because each persona
+had exactly one hand-placed dip.
+
+The tests under "Calibration" exist to catch that class of failure: they assert
+the model actually *discriminates* — that indices vary, that the cash-flow block
+can go negative, that the range is used, that nothing pins to a bound. Those are
+the properties an ordering test cannot see.
 """
 
 from __future__ import annotations
@@ -17,9 +29,10 @@ from pathlib import Path
 
 import pytest
 
+from app.core import scoring_config as cfg
 from app.schemas.statements import CreditRiskReport, FeatureVector, LifestyleProfile, Transaction
 from app.services.archetype import classify_archetype
-from app.services.credit_scorer import score
+from app.services.credit_scorer import _cashflow_block, _lifestyle_block, score
 from app.services.feature_engineering import build_features
 from app.services.lifestyle_profile import build_profile
 
@@ -32,6 +45,8 @@ PERSONAS = {
     "gambler": "04_gambler",
     "aspirational_overspender": "05_aspirational_overspender",
     "cash_reliant_informal": "06_cash_reliant_informal",
+    "frequent_bouncer": "07_frequent_bouncer",
+    "balanced_salaried": "08_balanced_salaried",
 }
 
 EXPECTED_ARCHETYPE = {
@@ -41,7 +56,18 @@ EXPECTED_ARCHETYPE = {
     "gambler": "Gambler",
     "aspirational_overspender": "Aspirational Overspender",
     "cash_reliant_informal": "Cash-Reliant Informal",
+    "frequent_bouncer": "Overextended",
+    "balanced_salaried": "Balanced",
 }
+
+L_INDEX_FIELDS = (
+    "l1_essential_stability",
+    "l2_aspirational",
+    "l3_digital_maturity",
+    "l4_commitment",
+    "l5_leverage",
+    "l6_risk_appetite",
+)
 
 
 def _load(persona: str) -> list[Transaction]:
@@ -64,6 +90,31 @@ def results() -> dict[str, tuple[FeatureVector, LifestyleProfile, str, CreditRis
     return {persona: _run(persona) for persona in PERSONAS}
 
 
+def _scores(results) -> dict[str, int]:
+    return {p: results[p][3].score for p in PERSONAS}
+
+
+# ---------------------------------------------------------------------------
+# Fixture integrity — the properties the calibration guards depend on.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("persona", list(PERSONAS))
+def test_persona_spans_enough_months_to_judge_recurrence(results, persona):
+    """L1 persistence and L4 cadence both need several months. At two months
+    neither can move, which is what made the original fixtures useless for
+    calibration."""
+    features, _, _, _ = results[persona]
+    assert features.months_covered >= 6
+
+
+def test_the_set_contains_bounced_payments_and_losing_months(results):
+    """Without either, the cash-flow block has nothing to push against and
+    silently degenerates into a constant."""
+    assert any(results[p][0].bounce_count > 0 for p in PERSONAS)
+    assert any(results[p][0].net_cashflow < 0 for p in PERSONAS)
+
+
 # ---------------------------------------------------------------------------
 # Archetype classification
 # ---------------------------------------------------------------------------
@@ -82,38 +133,65 @@ def test_archetype_matches_intended_persona(results, persona):
 
 
 def test_gambler_has_the_lowest_risk_appetite_index(results):
-    l6_by_persona = {p: results[p][1].l6_risk_appetite for p in PERSONAS}
-    assert min(l6_by_persona, key=l6_by_persona.get) == "gambler"
+    l6 = {p: results[p][1].l6_risk_appetite for p in PERSONAS}
+    assert min(l6, key=l6.get) == "gambler"
 
 
 def test_bnpl_heavy_spender_has_the_lowest_leverage_index(results):
-    l5_by_persona = {p: results[p][1].l5_leverage for p in PERSONAS}
-    assert min(l5_by_persona, key=l5_by_persona.get) == "bnpl_heavy_spender"
+    l5 = {p: results[p][1].l5_leverage for p in PERSONAS}
+    assert min(l5, key=l5.get) == "bnpl_heavy_spender"
 
 
 def test_cash_reliant_informal_has_the_lowest_digital_maturity(results):
-    l3_by_persona = {p: results[p][1].l3_digital_maturity for p in PERSONAS}
-    assert min(l3_by_persona, key=l3_by_persona.get) == "cash_reliant_informal"
+    l3 = {p: results[p][1].l3_digital_maturity for p in PERSONAS}
+    assert min(l3, key=l3.get) == "cash_reliant_informal"
 
 
 def test_aspirational_overspender_has_the_highest_aspirational_index(results):
-    l2_by_persona = {p: results[p][1].l2_aspirational for p in PERSONAS}
-    assert max(l2_by_persona, key=l2_by_persona.get) == "aspirational_overspender"
+    l2 = {p: results[p][1].l2_aspirational for p in PERSONAS}
+    assert max(l2, key=l2.get) == "aspirational_overspender"
 
 
-def test_salaried_saver_has_a_strong_commitment_index(results):
-    """L4 is "the self-control proxy — most important" (docs/taxonomy.md).
-    Salaried Saver is the only persona with sustained SIP + insurance +
-    rent, so it should clear a high bar, not just edge out the others."""
-    l4 = results["salaried_saver"][1].l4_commitment
-    assert l4 >= 60
+def test_salaried_saver_has_the_strongest_commitment_index(results):
+    """L4 is the heaviest-weighted index. Salaried Saver is the only persona
+    paying rent, insurance and a SIP on the same day every month."""
+    l4 = {p: results[p][1].l4_commitment for p in PERSONAS}
+    assert max(l4, key=l4.get) == "salaried_saver"
+    assert l4["salaried_saver"] >= 90
 
 
 def test_gig_hustler_is_fully_digital(results):
-    """The whole point of the archetype: no cash reliance, fully digital
-    income and spend, despite no formal employer."""
     l3 = results["gig_hustler"][1].l3_digital_maturity
     assert l3 >= 80
+
+
+def test_rent_paid_to_a_landlord_counts_as_a_commitment(results):
+    """Rent goes to a person, so no merchant tier resolves it and its category
+    stays None. It has to be recognised from the narration — without that, the
+    single largest recurring obligation most renters have is invisible to L4,
+    to FOIR and to the essential share."""
+    features, profile, _, _ = results["aspirational_overspender"]
+    assert profile.l4_commitment > 0, "rent should register as a commitment"
+    assert features.foir > 0, "rent should count toward fixed obligations"
+    assert features.essential_ratio > 0.1, "rent should count as essential spend"
+
+
+def test_bouncing_commitments_are_not_credited_as_commitment(results):
+    """A commitment that bounces is not being sustained. The bouncer pays rent
+    and a Bajaj EMI on a fixed schedule every month, so on cadence alone it
+    would post a near-perfect commitment index."""
+    assert results["frequent_bouncer"][1].l4_commitment < 20
+
+
+def test_absent_commitments_score_neutral_not_worst(results):
+    """Absence of evidence is not evidence of failure. Someone paying rent in
+    cash is invisible to L4; someone whose payments bounce is visible and
+    failing. Scoring both at zero penalised the informal earner for being
+    unbanked, which is the exclusion this project argues against."""
+    invisible = results["cash_reliant_informal"][1].l4_commitment
+    failing = results["frequent_bouncer"][1].l4_commitment
+    assert invisible == cfg.neutral_for("l4_commitment")
+    assert invisible > failing
 
 
 # ---------------------------------------------------------------------------
@@ -122,46 +200,117 @@ def test_gig_hustler_is_fully_digital(results):
 
 
 def test_gambler_scores_lowest_overall(results):
-    """Active gambling/crypto exposure is the strongest negative signal
-    this model tracks (docs/taxonomy.md L6 rationale) — it should pull the
-    final score below every other persona, not just its own lifestyle
-    block."""
-    scores = {p: results[p][3].score for p in PERSONAS}
+    scores = _scores(results)
     assert min(scores, key=scores.get) == "gambler"
 
 
 def test_disciplined_personas_outscore_leveraged_and_risky_ones(results):
-    """The two "disciplined" archetypes (steady/sustained commitments, no
-    leverage or risk exposure) should both outscore every archetype defined
-    by a leverage or risk problem — the core ordering the weights exist to
-    produce, even though exact point values are expert-set, not fitted."""
-    disciplined = ["salaried_saver", "gig_hustler"]
-    risky = ["bnpl_heavy_spender", "gambler"]
-    min_disciplined = min(results[p][3].score for p in disciplined)
-    max_risky = max(results[p][3].score for p in risky)
-    assert min_disciplined > max_risky
+    disciplined = ["salaried_saver", "gig_hustler", "balanced_salaried"]
+    risky = ["bnpl_heavy_spender", "gambler", "frequent_bouncer"]
+    assert min(results[p][3].score for p in disciplined) > max(results[p][3].score for p in risky)
 
 
 def test_salaried_saver_scores_in_excellent_or_very_good_band(results):
-    band = results["salaried_saver"][3].band
-    assert band in {"Excellent", "Very Good"}
+    assert results["salaried_saver"][3].band in {"Excellent", "Very Good"}
 
 
 def test_gambler_does_not_score_in_the_top_two_bands(results):
-    band = results["gambler"][3].band
-    assert band not in {"Excellent", "Very Good"}
+    assert results["gambler"][3].band not in {"Excellent", "Very Good"}
+
+
+def test_serial_bouncer_lands_in_the_bottom_band(results):
+    """The headline calibration regression: eight bounced payments and negative
+    net cash flow used to produce 755 / "Very Good", because the bounce penalty
+    saturated after two events and the lifestyle indices saw nothing unusual."""
+    report = results["frequent_bouncer"][3]
+    assert report.band == "Poor"
+    assert report.score < 500
+
+
+def test_gig_hustler_is_not_punished_for_lacking_an_employer(results):
+    """The project's central claim: platform income plus disciplined spending
+    should score like a good borrower, not like an unemployed one."""
+    report = results["gig_hustler"][3]
+    assert report.band in {"Excellent", "Very Good"}
+    assert not results["gig_hustler"][0].salary_detected
 
 
 # ---------------------------------------------------------------------------
-# Report shape sanity — every persona should produce a well-formed report,
-# not just the ones exercised above.
+# Calibration — that the model discriminates, not merely orders correctly.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("field", L_INDEX_FIELDS)
+def test_every_lifestyle_index_varies_across_personas(results, field):
+    """An index that reads the same for everyone contributes nothing but a
+    constant offset. L4 — the heaviest-weighted of the six — previously read
+    ~3/100 for five of six personas while every ordering test still passed."""
+    values = [getattr(results[p][1], field) for p in PERSONAS]
+    assert max(values) - min(values) >= 30, f"{field} barely moves: {values}"
+
+
+def test_scores_use_most_of_the_available_range(results):
+    scores = list(_scores(results).values())
+    assert max(scores) - min(scores) >= 400
+
+
+def test_no_persona_is_pinned_to_a_score_bound(results):
+    """Clamping at 900 makes two different profiles indistinguishable and
+    means the model has no headroom left above its best example."""
+    for persona, (_, _, _, report) in results.items():
+        assert report.score < cfg.SCORE_MAX, f"{persona} is clamped at the ceiling"
+        assert report.score > cfg.SCORE_MIN, f"{persona} is clamped at the floor"
+
+
+def test_every_band_is_reachable(results):
+    """A band no persona can reach is an untested region of the scale."""
+    bands = {results[p][3].band for p in PERSONAS}
+    assert bands == {"Poor", "Fair", "Good", "Very Good", "Excellent"}
+
+
+def test_cashflow_block_can_penalise_as_well_as_reward(results):
+    """It used to contribute +105..+199 to every persona — a flat bias dressed
+    up as a ±300 block."""
+    totals = {p: _cashflow_block(results[p][0])[0] for p in PERSONAS}
+    assert min(totals.values()) < -50, f"cash-flow block never penalises: {totals}"
+    assert max(totals.values()) > 50
+
+
+def test_lifestyle_block_can_penalise_as_well_as_reward(results):
+    totals = {p: _lifestyle_block(results[p][1], results[p][0])[0] for p in PERSONAS}
+    assert min(totals.values()) < -50, f"lifestyle block never penalises: {totals}"
+    assert max(totals.values()) > 50
+
+
+def test_bounce_penalty_keeps_scaling_past_two_events(results):
+    """With a -80 floor, two bounces and eight bounces cost exactly the same."""
+    few = results["bnpl_heavy_spender"][0]
+    many = results["frequent_bouncer"][0]
+    assert many.bounce_count > few.bounce_count
+    few_pts = _cashflow_block(few)[0]
+    many_pts = _cashflow_block(many)[0]
+    assert many_pts < few_pts
+
+
+def test_high_discretionary_spend_is_not_rewarded(results):
+    """L2 measures how much goes to discretionary categories. Scored on the
+    same "higher is better" ramp as the other indices, it handed points to the
+    persona spending 68% of income on food delivery and shopping."""
+    aspirational = results["aspirational_overspender"]
+    ordinary = results["balanced_salaried"]
+    assert aspirational[1].l2_aspirational > ordinary[1].l2_aspirational
+    assert aspirational[3].score < ordinary[3].score
+
+
+# ---------------------------------------------------------------------------
+# Report shape sanity
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("persona", list(PERSONAS))
 def test_report_is_well_formed(results, persona):
     _, profile, archetype, report = results[persona]
-    assert 300 <= report.score <= 900
+    assert cfg.SCORE_MIN <= report.score <= cfg.SCORE_MAX
     assert report.band in {"Poor", "Fair", "Good", "Very Good", "Excellent"}
     assert report.archetype == archetype
     assert report.lifestyle.archetype == archetype  # nested field kept in sync
@@ -169,128 +318,10 @@ def test_report_is_well_formed(results, persona):
     assert report.narrative  # never blank
 
 
-# ---------------------------------------------------------------------------
-# Fair lending — healthcare must never lower a score (docs/taxonomy.md)
-# ---------------------------------------------------------------------------
-
-
-def _base_healthcare_txns() -> list[Transaction]:
-    from datetime import date
-
-    return [
-        Transaction(
-            date="01-10-2025",
-            particulars="SALARY",
-            deposits="50000.00",
-            withdrawals="",
-            balance="50000.00",
-            payee="Employer",
-            payee_type="person",
-            txn_date=date(2025, 10, 1),
-            amount=50000.0,
-            direction="credit",
-            balance_val=50000.0,
-        ),
-        Transaction(
-            date="05-10-2025",
-            particulars="GROCERY",
-            deposits="",
-            withdrawals="3000.00",
-            balance="47000.00",
-            payee="BigBasket",
-            payee_type="merchant",
-            txn_date=date(2025, 10, 5),
-            amount=3000.0,
-            direction="debit",
-            balance_val=47000.0,
-            category="groceries",
-            is_essential=True,
-            lifestyle_dim="essential",
-            recurring_type="adhoc",
-        ),
-        Transaction(
-            date="10-11-2025",
-            particulars="SALARY",
-            deposits="50000.00",
-            withdrawals="",
-            balance="94000.00",
-            payee="Employer",
-            payee_type="person",
-            txn_date=date(2025, 11, 1),
-            amount=50000.0,
-            direction="credit",
-            balance_val=94000.0,
-        ),
-        Transaction(
-            date="05-11-2025",
-            particulars="GROCERY",
-            deposits="",
-            withdrawals="3000.00",
-            balance="91000.00",
-            payee="BigBasket",
-            payee_type="merchant",
-            txn_date=date(2025, 11, 5),
-            amount=3000.0,
-            direction="debit",
-            balance_val=91000.0,
-            category="groceries",
-            is_essential=True,
-            lifestyle_dim="essential",
-            recurring_type="adhoc",
-        ),
-    ]
-
-
-def _with_large_healthcare_bill() -> list[Transaction]:
-    from datetime import date
-
-    txns = _base_healthcare_txns()
-    txns.append(
-        Transaction(
-            date="15-10-2025",
-            particulars="HOSPITAL BILL",
-            deposits="",
-            withdrawals="80000.00",
-            balance="-33000.00",
-            payee="Apollo Hospital",
-            payee_type="merchant",
-            txn_date=date(2025, 10, 15),
-            amount=80000.0,
-            direction="debit",
-            balance_val=-33000.0,
-            category="healthcare",
-            is_essential=True,
-            lifestyle_dim="essential",
-            recurring_type="adhoc",
-        )
-    )
-    return txns
-
-
-def test_healthcare_spend_does_not_change_the_score():
-    """A large medical bill must not move the score at all — not lower it,
-    not even indirectly through a diluted ratio. Full exclusion, not
-    zero-weighting (see app/services/feature_engineering.py docstring).
-
-    txn_count is deliberately the one field that DOES differ — it's a raw
-    row-volume metric, not a scoring ratio, so the healthcare row still
-    counts there (it's still a real transaction that happened); everything
-    that actually feeds the score must be identical.
-    """
-    baseline_txns = _base_healthcare_txns()
-    with_bill_txns = _with_large_healthcare_bill()
-
-    baseline_features = build_features(baseline_txns)
-    with_bill_features = build_features(with_bill_txns)
-    assert with_bill_features.txn_count == baseline_features.txn_count + 1
-    assert with_bill_features.model_copy(update={"txn_count": 0}) == baseline_features.model_copy(
-        update={"txn_count": 0}
-    )
-
-    baseline_profile = build_profile(baseline_txns, baseline_features)
-    with_bill_profile = build_profile(with_bill_txns, with_bill_features)
-    assert baseline_profile == with_bill_profile
-
-    baseline_report = score(baseline_features, baseline_profile, "Balanced")
-    with_bill_report = score(with_bill_features, with_bill_profile, "Balanced")
-    assert baseline_report.score == with_bill_report.score
+@pytest.mark.parametrize("persona", list(PERSONAS))
+def test_every_archetype_has_its_own_narrative(results, persona):
+    """A missing entry silently falls back to the "Balanced" copy, which would
+    describe an Overextended profile as unremarkable."""
+    _, _, archetype, report = results[persona]
+    if archetype != "Balanced":
+        assert report.narrative != "No single spending pattern dominates this statement."

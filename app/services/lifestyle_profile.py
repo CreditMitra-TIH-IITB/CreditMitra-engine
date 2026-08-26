@@ -19,10 +19,25 @@ import math
 from collections import Counter, defaultdict
 from datetime import date
 
+from app.core import scoring_config as cfg
 from app.schemas.statements import FeatureVector, LifestyleProfile, Transaction
+from app.services.feature_engineering import is_rent
 
-_COMMITTED_CATEGORIES = {"investments", "insurance", "rent", "loan_emi"}
 _RISK_FLAGS = {"gambling", "crypto"}
+
+# A voluntary commitment is rent or a `commitment` row (SIP, insurance, loan
+# EMI). Anything carrying a risk_flag is excluded on purpose: paying four BNPL
+# apps on time every month is leverage, not character, and L5 already scores it.
+# Counting it here would have let the most leveraged persona post a near-perfect
+# commitment index.
+_COMMITMENT_DIM = "commitment"
+
+# Day-of-month spread at which a commitment stops looking scheduled at all.
+_REGULARITY_SPREAD_DAYS = 8.0
+
+# A commitment paid this reliably relative to income is "fully" sustained;
+# research doc L4 uses 0.35 x income as the reference obligation load.
+_COMMITMENT_INCOME_REFERENCE = 0.35
 
 
 def _month_key(d: date) -> tuple[int, int]:
@@ -54,16 +69,49 @@ def _safe_div(numerator: float, denominator: float) -> float:
 # ---------------------------------------------------------------------------
 
 
+def _spending_persistence(debits: list[Transaction]) -> float:
+    """Mean cosine similarity between consecutive months' category-spend
+    vectors — Gladstone et al.'s "spending persistence". A person whose
+    October looks like their November is running a stable life; one whose
+    category mix churns month to month is not.
+
+    Replaces the earlier stand-in ("did an essential row appear this month"),
+    which saturated at 1.0 for anyone who bought groceries and so carried no
+    information.
+    """
+    by_month: dict[tuple[int, int], dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for t in debits:
+        if t.txn_date and t.amount and t.category:
+            by_month[_month_key(t.txn_date)][t.category] += t.amount
+
+    months = sorted(by_month)
+    if len(months) < 2:
+        return 0.0
+
+    similarities: list[float] = []
+    for earlier, later in zip(months, months[1:], strict=False):
+        a, b = by_month[earlier], by_month[later]
+        shared = set(a) | set(b)
+        dot = sum(a.get(c, 0.0) * b.get(c, 0.0) for c in shared)
+        norm_a = math.sqrt(sum(v * v for v in a.values()))
+        norm_b = math.sqrt(sum(v * v for v in b.values()))
+        if norm_a and norm_b:
+            similarities.append(dot / (norm_a * norm_b))
+    return sum(similarities) / len(similarities) if similarities else 0.0
+
+
 def _l1_essential_stability(scoring: list[Transaction], features: FeatureVector) -> int:
-    """Persistence (essentials paid most months) + a healthy essential share."""
+    """Research doc L1: 100 x (0.6 x essential_share + 0.4 x persistence).
+
+    The share weight leads, because *what* the money goes to is the primary
+    claim; persistence modulates it. Both terms are raw ratios — the earlier
+    version divided the share by 0.5 before capping, which let a profile with
+    only 50% essential spend read as a perfect essential share.
+    """
     debits = _debits(scoring)
-    months = {_month_key(t.txn_date) for t in debits if t.txn_date}
-    months_with_essential = {
-        _month_key(t.txn_date) for t in debits if t.lifestyle_dim == "essential" and t.txn_date
-    }
-    persistence = _safe_div(len(months_with_essential), max(len(months), 1))
-    share = min(features.essential_ratio / 0.5, 1.0)
-    return _clamp(100 * (0.6 * persistence + 0.4 * share))
+    share = min(features.essential_ratio, 1.0)
+    persistence = _spending_persistence(debits)
+    return _clamp(100 * (0.6 * share + 0.4 * persistence))
 
 
 def _l2_aspirational(features: FeatureVector) -> int:
@@ -78,20 +126,84 @@ def _l3_digital_maturity(features: FeatureVector) -> int:
     return _clamp(100 * (0.5 * (1 - cash_penalty) + 0.5 * features.merchant_resolution_rate))
 
 
-def _l4_commitment(scoring: list[Transaction], features: FeatureVector) -> int:
-    """The self-control proxy. Rewards SUSTAINED (>=2 distinct months)
-    voluntary commitments — SIP, insurance, rent, loan EMI — over a merely
-    healthy FOIR, because persistence across months is the actual signal
-    (docs/taxonomy.md: "rewards voluntary sustained obligations")."""
-    debits = _debits(scoring)
-    months_by_category: dict[str, set[tuple[int, int]]] = defaultdict(set)
-    for t in debits:
-        if t.category in _COMMITTED_CATEGORIES and t.txn_date:
-            months_by_category[t.category].add(_month_key(t.txn_date))
-    sustained_types = sum(1 for months in months_by_category.values() if len(months) >= 2)
+def _is_voluntary_commitment(t: Transaction) -> bool:
+    if t.risk_flag is not None:
+        return False
+    return is_rent(t) or t.lifestyle_dim == _COMMITMENT_DIM
 
-    foir_band = 1 - min(abs(features.foir - 0.25) / 0.35, 1.0)  # healthiest near foir=0.25
-    return _clamp(min(sustained_types, 3) * 30 + foir_band * 10)
+
+def _l4_commitment(scoring: list[Transaction], features: FeatureVector) -> int:
+    """The self-control proxy, and the heaviest-weighted index in the model.
+
+    Research doc L4:
+
+        L4 = 100 x min(1, SUM(recurring) / (0.35 x income)) x regularity_factor
+
+    where a recurring commitment is a payee paid on a near-monthly cadence and
+    `regularity_factor` falls as the day-of-month drifts. Three departures from
+    a literal reading, each deliberate:
+
+    1. Cadence is judged per *payee*, not per category, which is what makes
+       "the same landlord every month" legible as one sustained obligation.
+    2. A commitment only counts once it appears in >=3 distinct months. Two
+       payments are a coincidence; three are a habit.
+    3. The result is scaled by a reliability term. A commitment that bounces is
+       not being sustained, whatever the calendar says — without it, the
+       persona who bounced eight payments in six months scored a *perfect*
+       commitment index off the rent line alone. This intentionally overlaps
+       with the cash-flow block's bounce penalty: the two answer different
+       questions (did you honour your obligations vs can you cover your
+       outflows) and a bounce is real evidence for both.
+    """
+    debits = [t for t in _debits(scoring) if _is_voluntary_commitment(t)]
+    if not debits:
+        # No commitment rows at all is absence of evidence, not evidence of
+        # failure, and the two must not score the same. Someone who pays rent
+        # in cash is invisible here; someone whose rent ECS bounces every month
+        # is visible and failing. Returning 0 for both handed the informal
+        # cash earner the same penalty as the serial bouncer — precisely the
+        # exclusion this project exists to argue against. Neutral means the
+        # index contributes nothing and the score rests on what we can see.
+        return cfg.neutral_for("l4_commitment")
+
+    by_payee: dict[str, list[Transaction]] = defaultdict(list)
+    for t in debits:
+        # Rent shares a bucket regardless of how the landlord's name parsed.
+        key = "__rent__" if is_rent(t) else (t.payee or t.category or "").strip().lower()
+        if key:
+            by_payee[key].append(t)
+
+    monthly_total = 0.0
+    day_spreads: list[float] = []
+    for txns in by_payee.values():
+        months = {_month_key(t.txn_date) for t in txns if t.txn_date}
+        if len(months) < 3:
+            continue
+        amounts = [t.amount for t in txns if t.amount is not None]
+        if not amounts:
+            continue
+        # Per-month contribution, so a commitment paid in 4 of 6 months counts
+        # for what it actually is rather than its full monthly sticker value.
+        monthly_total += sum(amounts) / max(features.months_covered, 1)
+
+        days = [t.txn_date.day for t in txns if t.txn_date]
+        if len(days) >= 2:
+            mean_day = sum(days) / len(days)
+            variance = sum((d - mean_day) ** 2 for d in days) / len(days)
+            day_spreads.append(math.sqrt(variance))
+
+    if monthly_total <= 0:
+        return 0
+
+    reference = _COMMITMENT_INCOME_REFERENCE * features.monthly_income
+    magnitude = min(monthly_total / reference, 1.0) if reference > 0 else 0.0
+
+    spread = sum(day_spreads) / len(day_spreads) if day_spreads else 0.0
+    regularity = 1 - min(spread / _REGULARITY_SPREAD_DAYS, 1.0)
+
+    reliability = 1 - min(_safe_div(features.bounce_count, max(features.months_covered, 1)), 1.0)
+
+    return _clamp(100 * magnitude * regularity * reliability)
 
 
 def _l5_leverage(features: FeatureVector) -> int:
