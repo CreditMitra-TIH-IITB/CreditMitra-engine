@@ -222,15 +222,24 @@ score:
 - **`credit_scorer.py`** — combines the lifestyle indices and cash-flow
   features into a final score, band, and human-readable factors.
 
-Weights are expert-set (`app/core/scoring_config.py`), not fitted to
-labelled data — validated instead by a persona-ranking acceptance test
-(`tests/test_persona_ranking.py`) against six synthetic transaction
-histories in `tests/fixtures/personas/`, each built to stress one axis of
-the model. **Healthcare spend is fully excluded from every ratio and index**
-(fair lending) — never just zero-weighted.
+Weights are expert-set (`app/core/scoring_config.py`), not fitted to labelled
+data. A persona-ranking acceptance test (`tests/test_persona_ranking.py`) runs
+eight six-month synthetic histories in `tests/fixtures/personas/`, each built to
+stress one axis, and checks both ordering and that the model genuinely
+discriminates — every index varies, both blocks can penalise as well as reward,
+no score pins to a bound. **Healthcare spend is fully excluded from every ratio
+and index** (fair lending) — never just zero-weighted.
 
-Full weighting table, category taxonomy, and scoring rationale live in
-[`docs/taxonomy.md`](docs/taxonomy.md).
+> The persona suite is a consistency check, **not predictive validation**. The
+> personas were designed by the same people who set the weights, so passing it
+> shows the pipeline is coherent, not that the score predicts default. The score
+> has no measured AUC and should not be underwritten against.
+
+- [`docs/taxonomy.md`](docs/taxonomy.md) — weighting table, category taxonomy, scoring rationale
+- [`docs/lifestyle_profiling.md`](docs/lifestyle_profiling.md) — the six indices, their grounding, and the limitations
+- [`experiments/incremental_lift/`](experiments/incremental_lift/README.md) — what merchant
+  information is measurably worth, against external default labels. This is the
+  claim to quote; the score itself is a feature generator and a demo surface.
 
 ---
 
