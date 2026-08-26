@@ -128,10 +128,10 @@ class MerchantClassifierService:
         import onnxruntime as ort
         from transformers import AutoTokenizer
 
-        # transformers ships no type stubs, so strict mode flags this as untyped.
-        self._tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
-            tokenizer_dir, trust_remote_code=True
-        )
+        # Whether this call looks typed depends on the installed transformers
+        # version, so the exemption lives in pyproject's mypy overrides rather
+        # than an inline ignore that goes stale in one direction or the other.
+        self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir, trust_remote_code=True)
         self._embedding_session = ort.InferenceSession(
             embedding_path, providers=["CPUExecutionProvider"]
         )
