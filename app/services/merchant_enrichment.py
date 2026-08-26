@@ -36,11 +36,13 @@ a crash costs us the whole report.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +134,7 @@ class _Dictionary:
     def __init__(self) -> None:
         self._by_alias: dict[str, MerchantEnrichment] = {}
         self._gig_aliases: set[str] = set()
+        self.version = "unknown"
         self._load()
 
     def _load(self) -> None:
@@ -143,6 +146,12 @@ class _Dictionary:
         except Exception as exc:
             logger.error("Merchant dictionary unreadable: %s", exc)
             return
+
+        # Content hash, so any edit invalidates cached answers automatically and
+        # nobody has to remember to bump a version by hand.
+        self.version = hashlib.sha256(
+            json.dumps(raw.get("merchants", []), sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()[:12]
 
         for entry in raw.get("merchants", []):
             try:
@@ -198,20 +207,41 @@ class _Dictionary:
 # ---------------------------------------------------------------------------
 
 
-class _Cache:
-    """SQLite. Makes every unknown merchant cost exactly one LLM call, ever."""
+#: How long a miss stays cached before the name is retried. A miss records what
+#: we could not resolve on a given day, not a fact about the merchant.
+UNKNOWN_TTL_SECONDS = 7 * 24 * 3600
 
-    def __init__(self, path: Path) -> None:
+SOURCE_UNKNOWN = "unknown"
+
+
+class _Cache:
+    """SQLite. Makes every unknown merchant cost exactly one LLM call, ever.
+
+    Entries carry the dictionary version that produced them. Without that, the
+    cache is consulted before the dictionary and misses are stored forever, so
+    adding a merchant changes nothing for any name already looked up — the
+    server had the identical defect and it made curation pointless.
+    """
+
+    def __init__(self, path: Path, dictionary_version: str) -> None:
         self._path = path
+        self._dictionary_version = dictionary_version
         self._lock = threading.Lock()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(enrichment)").fetchall()}
+            if columns and "dictionary_version" not in columns:
+                # Derived data with no way to check staleness; rebuilding is
+                # cheaper than migrating and safer than trusting it.
+                logger.warning("Rebuilding enrichment cache: schema predates dictionary_version")
+                conn.execute("DROP TABLE enrichment")
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS enrichment ("
                 "  normalized_name TEXT PRIMARY KEY,"
                 "  payload TEXT NOT NULL,"
                 "  source TEXT NOT NULL,"
-                "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                "  dictionary_version TEXT NOT NULL DEFAULT '',"
+                "  cached_at REAL NOT NULL DEFAULT 0"
                 ")"
             )
 
@@ -222,11 +252,18 @@ class _Cache:
         try:
             with self._lock, self._connect() as conn:
                 row = conn.execute(
-                    "SELECT payload FROM enrichment WHERE normalized_name = ?",
+                    "SELECT payload, source, dictionary_version, cached_at"
+                    " FROM enrichment WHERE normalized_name = ?",
                     (normalized,),
                 ).fetchone()
-            if row:
-                return MerchantEnrichment(**json.loads(row[0]))
+            if not row:
+                return None
+            payload, source, version, cached_at = row
+            if version != self._dictionary_version:
+                return None
+            if source == SOURCE_UNKNOWN and (time.time() - (cached_at or 0)) > UNKNOWN_TTL_SECONDS:
+                return None
+            return MerchantEnrichment(**json.loads(payload))
         except Exception as exc:
             logger.debug("Cache read failed for %r: %s", normalized, exc)
         return None
@@ -235,9 +272,16 @@ class _Cache:
         try:
             with self._lock, self._connect() as conn:
                 conn.execute(
-                    "INSERT OR REPLACE INTO enrichment (normalized_name, payload, source)"
-                    " VALUES (?, ?, ?)",
-                    (normalized, enrichment.model_dump_json(), source),
+                    "INSERT OR REPLACE INTO enrichment"
+                    " (normalized_name, payload, source, dictionary_version, cached_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (
+                        normalized,
+                        enrichment.model_dump_json(),
+                        source,
+                        self._dictionary_version,
+                        time.time(),
+                    ),
                 )
         except Exception as exc:
             logger.debug("Cache write failed for %r: %s", normalized, exc)
@@ -520,8 +564,23 @@ def _coerce(result: Any, name: str) -> MerchantEnrichment:
 class MerchantEnrichmentService:
     def __init__(self) -> None:
         self._dictionary = _Dictionary()
-        self._cache = _Cache(_CACHE_PATH)
+        self._cache = _Cache(_CACHE_PATH, self._dictionary.version)
         self._fallback = _LLMFallback()
+
+    def _resolve_offline(self, name: str) -> MerchantEnrichment | None:
+        """Cache then dictionary — the tiers that cost nothing and send nothing.
+        Returns None when neither knows the name."""
+        normalized = normalize_name(name)
+        if not normalized:
+            return None
+        cached = self._cache.get(normalized)
+        if cached is not None and cached.category != "other":
+            return cached
+        hit = self._dictionary.lookup(normalized)
+        if hit is not None:
+            self._cache.put(normalized, hit, source="dictionary")
+            return hit
+        return None
 
     def enrich_one(self, name: str) -> MerchantEnrichment:
         normalized = normalize_name(name)
@@ -553,19 +612,52 @@ class MerchantEnrichmentService:
         return fallback
 
     def enrich(self, names: list[str]) -> list[MerchantEnrichment]:
-        """Batch, order-preserving. Deduped so 6 IRCTC rows = 1 lookup."""
+        """Batch, order-preserving. Deduped so 6 IRCTC rows = 1 lookup.
+
+        The remote server is a *tier*, not a replacement. It used to be handed
+        every name and its answers returned wholesale, which meant switching it
+        on replaced a local dictionary of 85 merchants — plus the cache and the
+        LLM tier — with whatever the server happened to know. Merchants the
+        engine could resolve offline stopped resolving the moment the server
+        was configured.
+
+        Local tiers now run first. Only names nothing here can resolve are sent
+        out, which is both a better result and less data leaving the device.
+        """
         if not names:
             return []
-        if getattr(settings, "MERCHANT_ENRICHMENT_URL", None):
+
+        unique = {normalize_name(n): n for n in names if normalize_name(n)}
+        resolved: dict[str, MerchantEnrichment] = {}
+
+        # 1. cache + dictionary, on-device.
+        unresolved: dict[str, str] = {}
+        for normalized, original in unique.items():
+            local = self._resolve_offline(original)
+            if local is not None:
+                resolved[normalized] = local
+            else:
+                unresolved[normalized] = original
+
+        # 2. the shared server sees only what we could not resolve ourselves.
+        if unresolved and getattr(settings, "MERCHANT_ENRICHMENT_URL", None):
             from app.services.merchant_enrichment_client import enrich_merchants_via_http
 
-            http_res = enrich_merchants_via_http(names)
-            if http_res is not None:
-                return http_res
+            pending = list(unresolved.items())
+            remote = enrich_merchants_via_http([original for _, original in pending])
+            if remote is not None and len(remote) == len(pending):
+                for (normalized, _original), enrichment in zip(pending, remote, strict=True):
+                    if enrichment.category != "other":
+                        resolved[normalized] = enrichment
+                        self._cache.put(normalized, enrichment, source="server")
+                        unresolved.pop(normalized, None)
 
-        unique = {normalize_name(n): n for n in names}
-        resolved = {norm: self.enrich_one(orig) for norm, orig in unique.items()}
-        return [resolved[normalize_name(n)] for n in names]
+        # 3. anything still unknown falls through to the local LLM/web tier.
+        for normalized, original in unresolved.items():
+            resolved[normalized] = self.enrich_one(original)
+
+        fallback = MerchantEnrichment.unknown("")
+        return [resolved.get(normalize_name(n), fallback) for n in names]
 
     def is_gig_payout_source(self, name: str) -> bool:
         """True if a CREDIT from this merchant is gig income (Gig Hustler)."""
