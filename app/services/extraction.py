@@ -1,4 +1,3 @@
-import contextlib
 import logging
 import re
 from typing import Any
@@ -23,6 +22,7 @@ from app.services.parsing import (
     parse_date,
     strip_chq_artifacts,
 )
+from app.services.statement_layout import TableParseResult, rows_from_tables
 from app.services.task_store import update_task_status
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,22 @@ def _process_extracted_row(
     return rec
 
 
-def _extract_with_docling(pdf_path: str) -> list[dict[str, Any]]:
+def _rows_to_records(parsed: TableParseResult) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for fields in parsed.rows:
+        rec = _process_extracted_row(
+            fields["date"],
+            normalize_narration(fields["particulars"]),
+            fields["deposits"],
+            fields["withdrawals"],
+            fields["balance"],
+        )
+        if rec:
+            rows.append(rec)
+    return rows
+
+
+def _docling_tables(pdf_path: str) -> list[list[list[object]]]:
     # Disable heavy OCR image rendering on multi-page PDFs to prevent
     # std::bad_alloc out-of-memory crashes.
     opts = PdfPipelineOptions(do_ocr=False)
@@ -103,90 +118,77 @@ def _extract_with_docling(pdf_path: str) -> list[dict[str, Any]]:
     )
     result = converter.convert(pdf_path)
 
-    rows: list[dict[str, Any]] = []
+    tables: list[list[list[object]]] = []
     for table in result.document.tables:
-        df = table.export_to_dataframe()
-        df.columns = [str(c).strip().lower() for c in df.columns]
-        df = df.fillna("")
-
-        for row in df.to_dict("records"):
-            date_val = str(row.get("date", "")).strip()
-            particulars_raw = normalize_narration(
-                str(row.get("particulars", row.get("narration", row.get("description", ""))))
-            )
-            deposits_val = str(
-                row.get("deposits", row.get("credit", row.get("deposit", "")))
-            ).strip()
-            withdrawals_val = str(
-                row.get("withdrawals", row.get("debit", row.get("withdrawal", "")))
-            ).strip()
-            balance_val = str(row.get("balance", "")).strip()
-
-            rec = _process_extracted_row(
-                date_val, particulars_raw, deposits_val, withdrawals_val, balance_val
-            )
-            if rec:
-                rows.append(rec)
-    return rows
+        df = table.export_to_dataframe().fillna("")
+        header = [str(c) for c in df.columns]
+        body = [list(r) for r in df.itertuples(index=False, name=None)]
+        # Docling numbers the columns 0..n when a table has no header row
+        # (typically a continuation page). Those placeholders are not data.
+        if all(h.strip().isdigit() for h in header):
+            tables.append(body)
+        else:
+            tables.append([list(header), *body])
+    return tables
 
 
-def _extract_with_pdfplumber(pdf_path: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _pdfplumber_tables(pdf_path: str) -> list[list[list[object]]]:
+    tables: list[list[list[object]]] = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            tables = page.extract_tables()
-            for table in tables:
-                if not table or len(table) < 2:
-                    continue
-                header = [str(col or "").strip().lower() for col in table[0]]
-                for row_data in table[1:]:
-                    if not row_data:
-                        continue
-                    row_dict = {
-                        header[i]: str(row_data[i] or "").strip()
-                        for i in range(min(len(header), len(row_data)))
-                    }
-                    date_val = str(row_dict.get("date", "")).strip()
-                    particulars_raw = normalize_narration(
-                        str(
-                            row_dict.get(
-                                "particulars",
-                                row_dict.get("narration", row_dict.get("description", "")),
-                            )
-                        )
-                    )
-                    deposits_val = str(
-                        row_dict.get(
-                            "deposits", row_dict.get("credit", row_dict.get("deposit", ""))
-                        )
-                    ).strip()
-                    withdrawals_val = str(
-                        row_dict.get(
-                            "withdrawals", row_dict.get("debit", row_dict.get("withdrawal", ""))
-                        )
-                    ).strip()
-                    balance_val = str(row_dict.get("balance", "")).strip()
+            for table in page.extract_tables():
+                if table:
+                    tables.append([list(row) for row in table if row])
+    return tables
 
-                    rec = _process_extracted_row(
-                        date_val, particulars_raw, deposits_val, withdrawals_val, balance_val
-                    )
-                    if rec:
-                        rows.append(rec)
-    return rows
+
+class UnrecognisedStatementError(ValueError):
+    """No transactions could be read from the statement's tables."""
+
+
+def _unrecognised(parsed: list[TableParseResult]) -> UnrecognisedStatementError:
+    headers = [h for p in parsed for h in p.unrecognised_headers][:3]
+    seen = "; ".join(" | ".join(h) for h in headers) or "no tables found"
+    return UnrecognisedStatementError(
+        f"No transactions could be extracted from this statement. Table headers seen: {seen}"
+    )
 
 
 def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
+    """Docling first, pdfplumber as fallback — both for a crash and for a
+    layout Docling returned but that yielded no transactions.
+
+    Raises UnrecognisedStatementError rather than returning an empty list, so
+    an unsupported layout fails the task visibly instead of "completing" with
+    zero transactions and no report.
+    """
+    attempts: list[TableParseResult] = []
+    docling_error: Exception | None = None
     try:
-        return _extract_with_docling(pdf_path)
+        parsed = rows_from_tables(_docling_tables(pdf_path))
+        attempts.append(parsed)
+        rows = _rows_to_records(parsed)
+        if rows:
+            return rows
+        logger.warning("Docling found no transactions, trying pdfplumber fallback...")
     except Exception as e:
+        docling_error = e
         logger.warning(f"Docling extraction failed ({e}), using pdfplumber fallback...")
-        try:
-            return _extract_with_pdfplumber(pdf_path)
-        except Exception as fallback_err:
-            logger.error(f"pdfplumber extraction also failed: {fallback_err}")
-            # Surface the original Docling failure, but keep the fallback's
-            # traceback attached so both causes are visible.
-            raise e from fallback_err
+
+    try:
+        parsed = rows_from_tables(_pdfplumber_tables(pdf_path))
+    except Exception as fallback_err:
+        logger.error(f"pdfplumber extraction also failed: {fallback_err}")
+        # Surface the original Docling failure, but keep the fallback's
+        # traceback attached so both causes are visible.
+        if docling_error is not None:
+            raise docling_error from fallback_err
+        raise
+    attempts.append(parsed)
+    rows = _rows_to_records(parsed)
+    if not rows:
+        raise _unrecognised(attempts)
+    return rows
 
 
 def process_pdf_task(task_id: str, pdf_path: str) -> None:
@@ -240,13 +242,18 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
                 txn["recurring_type"] = None
 
         # 5. Score (Track B — Issues #10-#13)
+        # Scoring stays best-effort — a statement too thin to score still
+        # completes with its transactions — but the reason is logged instead of
+        # being swallowed, so "report is null" is diagnosable.
         report = None
-        with contextlib.suppress(Exception):
+        try:
             tx_models = [Transaction(**t) for t in transactions]
             features = build_features(tx_models)
             profile = build_profile(tx_models, features)
             archetype = classify_archetype(features, profile)
             report = score(features, profile, archetype)
+        except Exception:
+            logger.exception(f"Task {task_id}: scoring skipped, no report produced")
 
         # 6. Save results to task store
         report_data = report.model_dump(mode="json") if report else None
