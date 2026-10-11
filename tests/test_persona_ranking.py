@@ -325,3 +325,18 @@ def test_every_archetype_has_its_own_narrative(results, persona):
     _, _, archetype, report = results[persona]
     if archetype != "Balanced":
         assert report.narrative != "No single spending pattern dominates this statement."
+
+
+def test_salary_detected_when_the_employer_is_classified_as_a_merchant() -> None:
+    """In the real pipeline an employer is a company, so the classifier labels it
+    a merchant. The fixtures hand-label it a person; this pins the real case."""
+    rows = json.loads((FIXTURES / "01_salaried_saver.json").read_text(encoding="utf-8"))
+    txns = [Transaction(**r) for r in rows]
+    for t in txns:
+        if "SALARY" in t.particulars:
+            t.payee_type = "merchant"
+
+    features = build_features(txns)
+
+    assert features.salary_detected
+    assert classify_archetype(features, build_profile(txns, features)) == "Salaried Saver"
