@@ -112,6 +112,10 @@ flowchart LR
 
 ## Quick Start
 
+**Running the whole stack (Ollama + engine + dashboard)?** Follow
+[`docs/RUNNING.md`](docs/RUNNING.md) — it covers the model files and the payee
+model build, which are not in git. The steps below are the engine alone.
+
 ```bash
 # Clone & enter
 git clone https://github.com/CreditMitra-TIH-IITB/CreditMitra-engine.git
@@ -128,8 +132,9 @@ python -m venv venv
 # Install with dev dependencies
 pip install -e ".[dev]"
 
-# Pull the Ollama models this pipeline uses
-ollama pull payee-lora:latest          # payee span extraction
+# Build the payee model into Ollama (not on a public registry — see docs/RUNNING.md)
+powershell -File scripts\build_payee_model.ps1 -MergedDir <payee-merged> -LlamaCpp <llama.cpp>
+# Only needed if web-search enrichment is enabled:
 ollama pull qwen2.5:1.5b-instruct      # merchant enrichment (NOT payee-lora — see docs/taxonomy.md)
 
 # Run the server
