@@ -1,3 +1,5 @@
+import faulthandler
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -8,6 +10,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import statements
 from app.core.config import settings
 from app.services.warmup import start_warmup
+
+# Uvicorn configures only its own loggers, so the engine's INFO messages (task
+# progress, warm-up) were dropped. Attach a handler to the `app` namespace only:
+# third-party INFO (httpx logs every Ollama call, Docling every page) stays off.
+_app_logger = logging.getLogger("app")
+if not _app_logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _app_logger.addHandler(_handler)
+_app_logger.setLevel(settings.LOG_LEVEL)
+
+# Docling (torch) and the classifier (onnxruntime) are native code; a crash in
+# either kills the process with no Python traceback. Dump one to stderr.
+faulthandler.enable()
 
 
 @asynccontextmanager

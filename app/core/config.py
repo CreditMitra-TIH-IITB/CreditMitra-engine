@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Credit Mitra API"
     API_V1_STR: str = "/api/v1"
+    LOG_LEVEL: str = "INFO"
 
     # Ollama settings
     OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")

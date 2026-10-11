@@ -61,3 +61,30 @@ def test_upload_deleted_when_task_completes(
 
     assert not pdf.exists()
     assert statuses[-1][0] == "completed"
+
+
+def test_each_distinct_payee_is_classified_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, statuses: list[Any]
+) -> None:
+    seen: list[list[str]] = []
+
+    class _RecordingClassifier:
+        def classify_batch(self, names: list[str]) -> list[dict[str, Any]]:
+            seen.append(list(names))
+            return [{"label": "person", "confidence": 0.9} for _ in names]
+
+    rows = [{"particulars": n, "payee": n} for n in ("RAVI", "ASHA", "RAVI", "RAVI")]
+    monkeypatch.setattr(extraction, "extract_transactions", lambda _: rows)
+    monkeypatch.setattr(extraction, "predict_payee", lambda narration, client: narration)
+    monkeypatch.setattr(
+        merchant_classifier.MerchantClassifierService,
+        "get_instance",
+        classmethod(lambda cls: _RecordingClassifier()),
+    )
+
+    extraction.process_pdf_task("t-dedupe", str(_upload(tmp_path)))
+
+    assert seen == [["RAVI", "ASHA"]]
+    status, saved = statuses[-1]
+    assert status == "completed"
+    assert [t["payee_type"] for t in saved["transactions"]] == ["person"] * 4
