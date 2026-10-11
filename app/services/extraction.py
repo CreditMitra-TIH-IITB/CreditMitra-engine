@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from typing import Any
 
@@ -44,6 +45,7 @@ def predict_payee(narration: str, client: httpx.Client) -> str:
         "prompt": build_prompt(narration),
         "stream": False,
         "raw": True,
+        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
         "options": {"temperature": 0, "num_predict": 32},
     }
     try:
@@ -267,3 +269,13 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}", exc_info=True)
         update_task_status(task_id, "failed", error=str(e))
+
+    finally:
+        # The upload is a user's bank statement. Once extracted, nothing reads
+        # it again, so it must not outlive the task — success or failure.
+        try:
+            os.remove(pdf_path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.error(f"Task {task_id}: could not delete upload {pdf_path}: {e}")

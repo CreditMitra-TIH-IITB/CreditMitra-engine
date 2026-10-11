@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
@@ -5,12 +7,21 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import statements
 from app.core.config import settings
+from app.services.warmup import start_warmup
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    start_warmup()
+    yield
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     description="Backend API for Credit Mitra Statement Processing",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Set up CORS for the React frontend. Origins come from CORS_ORIGINS so that a
