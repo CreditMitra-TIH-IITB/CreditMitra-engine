@@ -65,6 +65,22 @@ cd CreditMitra-engine && venv/bin/uvicorn app.main:app --port 8000
 cd CreditMitra-dashboard && npm run dev
 ```
 
+## Check it works end to end
+
+With the engine running:
+
+```powershell
+python scripts\make_sample_statements.py          # synthetic HDFC/SBI/ICICI/Axis layouts
+venv\Scripts\python scripts\e2e_check.py data\sample_statements\*.pdf
+```
+
+Each statement goes through the real API; the script prints rows extracted,
+empty payees, person/merchant split, merchants resolved, and the score — counts
+only, never names, so it is also safe to point at a real statement. It exits
+non-zero if any statement fails or yields no transactions. The four synthetic
+statements should land as Gig Hustler, Salaried Saver, BNPL-Heavy Spender and
+Gambler.
+
 ## What to expect
 
 - **Startup**: the engine answers `/health` immediately; the payee model and
