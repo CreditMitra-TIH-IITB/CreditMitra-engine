@@ -183,8 +183,15 @@ class MerchantClassifierService:
                 "Using dictionary + heuristic fallback."
             )
 
-    def _load_models(self) -> None:
-        embedding_path = os.path.join(_ONNX_DIR, "qwen3_embedding.onnx")
+    def _load_models(self, embedding_path: str | None = None) -> None:
+        if embedding_path is None:
+            # The FP16 build (scripts/quantize_classifier.py) is half the size,
+            # faster, and changed no labels on a 600-name check; use it whenever
+            # it has been generated.
+            fp16_path = os.path.join(_ONNX_DIR, "qwen3_embedding.fp16.onnx")
+            fp32_path = os.path.join(_ONNX_DIR, "qwen3_embedding.onnx")
+            embedding_path = fp16_path if os.path.exists(fp16_path) else fp32_path
+        logger.info(f"Merchant classifier embedding model: {os.path.basename(embedding_path)}")
         classifier_path = os.path.join(_MODELS_DIR, "attentionmlp.onnx")
         scaler_path = os.path.join(_MODELS_DIR, "scaler.joblib")
         tokenizer_dir = os.path.join(_ONNX_DIR, "tokenizer")
