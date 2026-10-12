@@ -141,8 +141,15 @@ Default of Credit Card Clients, Give Me Some Credit, Home Credit) ship
 pre-summarised features with no payee or category field — there is nothing for
 enrichment to act on, so no ablation is possible.
 
-Download `trans.asc` and `loan.asc` from
-<https://sorry.vse.cz/~berka/challenge/pkdd1999/> and point `--data-dir` at them.
+Download the original archive (the challenge's own host is gone; this is its
+Wayback Machine copy, no login needed), unzip it, and point `--data-dir` at the
+folder holding `trans.asc` and `loan.asc`:
+<https://web.archive.org/web/20180506061559/http://lisp.vse.cz/pkdd99/DATA/data_berka.zip>
+
+Only transactions dated **before** each loan's start are used. Without that
+cutoff the outcome leaks: defaulting borrowers run their accounts negative after
+the loan starts, and "minimum balance ≥ 0" alone separates good from bad loans
+perfectly. `--finished-only` runs the A-vs-B formulation on finished loans.
 
 **This adapter has not been run.** The sandbox this was written in has no
 outbound network, so the mapping is written from the published schema and needs
