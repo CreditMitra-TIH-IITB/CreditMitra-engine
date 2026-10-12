@@ -42,8 +42,8 @@ _CASH_WITHDRAWAL_RE = re.compile(
 # marked as a refund or reversal never does.
 _INSTRUMENT = r"(?:ECS|NACH|ACH|CHQ|CHEQUE|MANDATE|SI)"
 _BOUNCE_RE = re.compile(
-    rf"\b{_INSTRUMENT}\s*(?:RET|RTN|RETURN(?:ED)?)\b"
-    rf"|\b(?:RET|RTN|RETURN(?:ED)?)\s*{_INSTRUMENT}\b"
+    rf"\b{_INSTRUMENT}\s*(?:RET|RTN|RETURN(?:ED)?|UNPAID)\b"
+    rf"|\b(?:RET|RTN|RETURN(?:ED)?|UNPAID)\s*{_INSTRUMENT}\b"
     r"|\bBOUNCE[D]?\b|\bINSUFFICIENT\s*(?:FUND|BAL)|\bDISHONO[UR]*R",
     re.IGNORECASE,
 )

@@ -130,6 +130,16 @@ def test_refunds_are_not_bounces() -> None:
     assert build_features(rows).bounce_count == 1
 
 
+@pytest.mark.parametrize(
+    "narration",
+    ["NACH UNPAID BAJAJ FIN", "ECS UNPAID CHGS", "UNPAID CHQ 004512", "MANDATE UNPAID SIP"],
+)
+def test_instrument_unpaid_markers_are_bounces(narration: str) -> None:
+    """Banks also mark a failed debit instruction 'UNPAID' rather than
+    'RETURN'; dropping that word to fix refunds must not lose these."""
+    assert build_features([_txn(narration, "debit", 5)]).bounce_count == 1
+
+
 # --- crash recovery -----------------------------------------------------------
 
 
