@@ -35,11 +35,19 @@ from app.services.merchant_enrichment import get_enrichment_service
 _CASH_WITHDRAWAL_RE = re.compile(
     r"\bATM\b|\bCASH\s*W(?:I)?T?H?D(?:RAWAL)?\b|\bCSH\s*WDL\b", re.IGNORECASE
 )
+# A bounce is a failed debit instruction (ECS/NACH/cheque/mandate returned),
+# not money coming back. A bare "RETURN" also matches merchant refunds
+# ("AMAZON RETURN REFUND"), and each false bounce costs 35 points, so only
+# instrument-qualified returns and explicit failure wording count, and anything
+# marked as a refund or reversal never does.
+_INSTRUMENT = r"(?:ECS|NACH|ACH|CHQ|CHEQUE|MANDATE|SI)"
 _BOUNCE_RE = re.compile(
-    r"\bRETURN(?:ED)?\b|\bBOUNCE[D]?\b|\bECS\s*RET\b|\bCHQ\s*RET\b|"
-    r"\bINSUFFICIENT\s*FUND|\bUNPAID\b|\bDISHONO[UR]*R",
+    rf"\b{_INSTRUMENT}\s*(?:RET|RTN|RETURN(?:ED)?)\b"
+    rf"|\b(?:RET|RTN|RETURN(?:ED)?)\s*{_INSTRUMENT}\b"
+    r"|\bBOUNCE[D]?\b|\bINSUFFICIENT\s*(?:FUND|BAL)|\bDISHONO[UR]*R",
     re.IGNORECASE,
 )
+_REFUND_RE = re.compile(r"\bREFUND|\bREVERSAL\b|\bREVERSED\b|\bCASHBACK\b", re.IGNORECASE)
 _RENT_RE = re.compile(r"\bRENT\b|\bHOUSE\s*RENT\b|\bLANDLORD\b", re.IGNORECASE)
 
 _ASPIRATIONAL_DIM = "aspirational"
@@ -236,7 +244,11 @@ def build_features(transactions: list[Transaction]) -> FeatureVector:
     ]
     merchant_resolution_rate = _safe_div(len(resolved_merchant_debits), len(merchant_debits))
 
-    bounce_count = sum(1 for t in usable if _BOUNCE_RE.search(t.particulars or ""))
+    bounce_count = sum(
+        1
+        for t in usable
+        if _BOUNCE_RE.search(t.particulars or "") and not _REFUND_RE.search(t.particulars or "")
+    )
 
     bnpl_debits = [t for t in debits if t.risk_flag == "bnpl_lending"]
     bnpl_merchant_count = len({(t.payee or "").strip().lower() for t in bnpl_debits if t.payee})
@@ -249,6 +261,7 @@ def build_features(transactions: list[Transaction]) -> FeatureVector:
 
     return FeatureVector(
         salary_detected=salary_detected,
+        gig_income_detected=gig_avg > 0,
         monthly_income=round(monthly_income, 2),
         foir=round(foir, 4),
         net_cashflow=round(net_cashflow, 2),
