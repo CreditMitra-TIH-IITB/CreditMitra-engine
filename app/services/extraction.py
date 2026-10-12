@@ -24,7 +24,16 @@ from app.services.parsing import (
     parse_date,
     strip_chq_artifacts,
 )
-from app.services.statement_layout import TableParseResult, rows_from_tables
+from app.services.statement_layout import (
+    AMOUNT,
+    BALANCE,
+    DATE,
+    DEPOSITS,
+    WITHDRAWALS,
+    TableParseResult,
+    canonical_column,
+    rows_from_tables,
+)
 from app.services.task_store import update_task_status
 
 logger = logging.getLogger(__name__)
@@ -135,13 +144,96 @@ def _docling_tables(pdf_path: str) -> list[list[list[object]]]:
     return tables
 
 
+# A vertical gap this many times the page's usual line spacing separates two
+# transactions in a borderless table body (see _borderless_body).
+_BLOCK_GAP_FACTOR = 1.6
+_SUMMARY_LINE_RE = re.compile(r"\b(opening|closing)\s+balance\b", re.IGNORECASE)
+
+
+def _borderless_body(page: Any, table: Any) -> list[list[object]]:
+    """Rows for a table whose header is boxed but whose body is not.
+
+    pdfplumber finds tables by their ruling lines. Statements like Canara's
+    e-passbook draw a box around the header row only, so the table it finds is
+    the header alone and every transaction below it is missed. Here the
+    header's cell boundaries define the columns, each word below the header is
+    placed in the column under which it sits, and lines are grouped into one
+    transaction per block — blocks being separated by a wider-than-usual
+    vertical gap, since one transaction wraps over several lines (narration,
+    then the line with date/amount/balance, then a timestamp).
+
+    Blocks with neither a date nor an amount (an orphan "Chq: <ref>" line, a
+    page footer) are dropped rather than glued onto a neighbour.
+    """
+    header_cells = [c for c in table.rows[0].cells if c]
+    bounds = sorted((c[0], c[2]) for c in header_cells)
+    if len(bounds) < 3:
+        return []
+    header: list[object] = [str(v or "").strip() for v in (table.extract() or [[]])[0]]
+
+    def column(word: dict[str, Any]) -> int:
+        center = (word["x0"] + word["x1"]) / 2
+        return min(
+            range(len(bounds)),
+            key=lambda i: (
+                0
+                if bounds[i][0] <= center < bounds[i][1]
+                else min(abs(center - bounds[i][0]), abs(center - bounds[i][1]))
+            ),
+        )
+
+    words = [w for w in page.extract_words() if w["top"] >= table.bbox[3]]
+    lines: dict[float, list[dict[str, Any]]] = {}
+    for w in words:
+        lines.setdefault(round(w["top"]), []).append(w)
+    tops = sorted(lines)
+    if not tops:
+        return []
+    gaps = sorted(b - a for a, b in zip(tops, tops[1:], strict=False) if b > a)
+    spacing = gaps[len(gaps) // 2] if gaps else 0.0
+
+    def is_summary(top: float) -> bool:
+        return bool(_SUMMARY_LINE_RE.search(" ".join(w["text"] for w in lines[top])))
+
+    # An "Opening/Closing Balance" line is always its own block: the first
+    # transaction can sit close enough beneath it to be merged otherwise, and
+    # the merged row is then dropped as a summary row.
+    blocks: list[list[float]] = [[tops[0]]]
+    for prev, top in zip(tops, tops[1:], strict=False):
+        wide_gap = spacing and top - prev > _BLOCK_GAP_FACTOR * spacing
+        if wide_gap or is_summary(prev) or is_summary(top):
+            blocks.append([])
+        blocks[-1].append(top)
+
+    roles = [canonical_column(h) for h in header]
+    date_cols = [i for i, r in enumerate(roles) if r == DATE]
+    amount_cols = [i for i, r in enumerate(roles) if r in (DEPOSITS, WITHDRAWALS, AMOUNT, BALANCE)]
+
+    rows: list[list[object]] = [header]
+    for block in blocks:
+        cells: list[list[str]] = [[] for _ in bounds]
+        for top in block:
+            for w in sorted(lines[top], key=lambda w: w["x0"]):
+                cells[column(w)].append(w["text"])
+        row: list[object] = [" ".join(c) for c in cells]
+        has_date = any(parse_date(str(row[i])) is not None for i in date_cols if i < len(row))
+        has_amount = any(parse_amount(str(row[i])) is not None for i in amount_cols if i < len(row))
+        if has_date or has_amount:
+            rows.append(row)
+    return rows if len(rows) > 1 else []
+
+
 def _pdfplumber_tables(pdf_path: str) -> list[list[list[object]]]:
     tables: list[list[list[object]]] = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            for table in page.extract_tables():
-                if table:
-                    tables.append([list(row) for row in table if row])
+            for found in page.find_tables():
+                rows: list[list[object]] = [list(row) for row in found.extract() if row]
+                if len(rows) == 1:
+                    # Header-only: the body is unruled. Rebuild it from words.
+                    rows = _borderless_body(page, found) or rows
+                if rows:
+                    tables.append(rows)
     return tables
 
 
