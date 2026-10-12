@@ -65,6 +65,10 @@ baked dictionary, merge it into the volume's copy and call
 
 - Uploaded statements are deleted as soon as they are processed; a statement
   interrupted by a crash is deleted at the next start.
+- Results are encrypted at rest with `TASK_ENCRYPTION_KEY` (required in
+  `deploy/.env`) and deleted after `RESULT_RETENTION_DAYS` (default 30). **Back
+  up the key**: results written with it cannot be read without it. Outside
+  Docker both are off unless set (see `app/services/task_store.py`).
 - The engine sends the merchant server only names it could not resolve itself,
   plus an opaque statement fingerprint. Nothing leaves the compose network
   unless `GEMINI_API_KEY` / `LANGSEARCH_API_KEY` are set, and even then only for

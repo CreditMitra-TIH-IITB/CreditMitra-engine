@@ -9,7 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import statements
 from app.core.config import settings
-from app.services.task_store import fail_interrupted_tasks
+from app.services.task_store import (
+    check_encryption_key,
+    fail_interrupted_tasks,
+    purge_expired_results,
+)
 from app.services.warmup import start_warmup
 
 # Uvicorn configures only its own loggers, so the engine's INFO messages (task
@@ -29,6 +33,10 @@ faulthandler.enable()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    check_encryption_key()
+    purged = purge_expired_results()
+    if purged:
+        _app_logger.info(f"Deleted {purged} task result(s) past the retention period")
     recovered = fail_interrupted_tasks()
     if recovered:
         _app_logger.warning(f"Marked {recovered} interrupted task(s) as failed")

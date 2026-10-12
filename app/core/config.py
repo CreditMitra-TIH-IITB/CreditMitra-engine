@@ -50,6 +50,10 @@ class Settings(BaseSettings):
 
     # Local Data Storage for background tasks
     DATA_DIR: str = os.getenv("DATA_DIR", "./data")
+    # Privacy at rest, both opt-in (app/services/task_store.py). A Fernet key
+    # encrypts task results; a retention period deletes results older than it.
+    TASK_ENCRYPTION_KEY: str = ""
+    RESULT_RETENTION_DAYS: int = 0
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 

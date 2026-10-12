@@ -24,6 +24,9 @@ services:
       MERCHANT_ENRICHMENT_URL: http://merchant-server:8001
       MERCHANT_API_KEY: ${MERCHANT_API_KEY:?set MERCHANT_API_KEY in deploy/.env}
       CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      # Results are encrypted at rest and deleted after the retention period.
+      TASK_ENCRYPTION_KEY: ${TASK_ENCRYPTION_KEY:?set TASK_ENCRYPTION_KEY in deploy/.env}
+      RESULT_RETENTION_DAYS: ${RESULT_RETENTION_DAYS:-30}
     volumes:
       # Classifier models are not in git (see data/models/README.md).
       - ../data/models:/app/data/models:ro

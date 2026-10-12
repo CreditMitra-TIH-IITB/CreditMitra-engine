@@ -10,7 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from app.core.config import settings
 from app.schemas.statements import ReportResponse, TaskResponse, TaskStatusResponse
 from app.services.extraction import process_pdf_task
-from app.services.task_store import get_task, update_task_status
+from app.services.task_store import get_task, purge_expired_results, update_task_status
 
 router = APIRouter()
 
@@ -26,6 +26,7 @@ async def upload_statement(
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
     task_id = str(uuid.uuid4())
+    await asyncio.to_thread(purge_expired_results)
 
     # Save file to disk temporarily
     suffix = Path(filename).suffix
