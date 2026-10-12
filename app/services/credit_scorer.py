@@ -141,12 +141,12 @@ def _cashflow_block(features: FeatureVector) -> tuple[float, list[ScoreFactor]]:
             )
         )
         total += pts
-    elif features.monthly_income > 0:
+    elif features.gig_income_detected:
         pts = cfg.INCOME_GIG_POINTS
         factors.append(
             ScoreFactor(
                 factor=(
-                    f"Recurring income detected without a single employer "
+                    f"Recurring gig-platform income without a single employer "
                     f"(~Rs {features.monthly_income:,.0f}/mo)"
                 ),
                 impact=pts,
@@ -154,6 +154,20 @@ def _cashflow_block(features: FeatureVector) -> tuple[float, list[ScoreFactor]]:
             )
         )
         total += pts
+    elif features.monthly_income > 0:
+        # Money comes in, but neither as a salary nor as gig payouts — family
+        # support, one-off transfers. Not evidence of income regularity either
+        # way, so it earns nothing; it used to earn the gig-income points.
+        factors.append(
+            ScoreFactor(
+                factor=(
+                    f"Inflows of ~Rs {features.monthly_income:,.0f}/mo, but no regular "
+                    f"salary or gig payout"
+                ),
+                impact=0,
+                block="cashflow",
+            )
+        )
     else:
         factors.append(
             ScoreFactor(

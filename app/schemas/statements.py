@@ -122,6 +122,10 @@ class FeatureVector(BaseModel):
     """Cash-flow features. Output of build_features(transactions)."""
 
     salary_detected: bool = False
+    # Recurring payouts from a gig platform (Swiggy/Uber/... paying the user).
+    # Additive (Issue #1 contract): distinguishes gig income from any other
+    # inflow, which is what the Gig Hustler archetype actually means.
+    gig_income_detected: bool = False
     monthly_income: float = 0.0
     foir: float = 0.0  # fixed obligations / income
     net_cashflow: float = 0.0

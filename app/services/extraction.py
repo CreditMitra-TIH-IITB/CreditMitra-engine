@@ -58,6 +58,47 @@ def predict_payee(narration: str, client: httpx.Client) -> str:
         return ""
 
 
+_COMPACT_RE = re.compile(r"[^a-z0-9]")
+_WORD_RE = re.compile(r"[a-z0-9]+")
+# Where the counterparty name sits in common UPI narration formats:
+#   UPI/DR/601591718046/SWIGGY LI/UTIB/...   (Canara, SBI)
+#   UPI-SWIGGY-swiggy@icici-ICIC0DC0099-...  (HDFC)
+_UPI_NAME_RES = (
+    re.compile(r"^UPI/(?:DR|CR)/\d+/([^/]+)/", re.IGNORECASE),
+    re.compile(r"^UPI-([^-]+)-", re.IGNORECASE),
+)
+
+
+def payee_is_grounded(payee: str, narration: str) -> bool:
+    """Every word of the predicted payee must be traceable to the narration.
+
+    The payee model sometimes *invents* a name for a truncated narration —
+    "NYKAA ERE" -> "PayViva", "CONNAU GHT" -> "Connaught Hill", a person's name
+    -> "Axis Bank". Expansion of a truncation is fine ("JIO RECHA" -> "Jio
+    Recharge"), so a word counts as present when its first ~60% (at least 3
+    characters) appears in the narration.
+    """
+    haystack = _COMPACT_RE.sub("", narration.lower())
+    words = [w for w in _WORD_RE.findall(payee.lower()) if len(w) >= 3]
+    if not words:
+        return bool(payee.strip())
+    return all(w[: max(3, -(-len(w) * 3 // 5))] in haystack for w in words)
+
+
+def ground_payee(payee: str, narration: str) -> str:
+    """Keep the model's payee if it is grounded; otherwise fall back to the
+    name segment of a UPI narration, which is where the name literally is."""
+    if not payee or payee_is_grounded(payee, narration):
+        return payee
+    for pattern in _UPI_NAME_RES:
+        m = pattern.match(narration.strip())
+        if m and re.search(r"[A-Za-z]", m.group(1)):
+            fallback = re.sub(r"\s+", " ", m.group(1)).strip().title()
+            logger.debug(f"Ungrounded payee {payee!r}; using narration segment {fallback!r}")
+            return fallback
+    return payee
+
+
 def normalize_narration(text: str) -> str:
     """Collapse multi-line narrations into one line; segments join with no gap."""
     if not text:
@@ -213,7 +254,7 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
             for txn in transactions:
                 narration = txn.get("particulars", "")
                 if narration and narration not in ("Opening Balance", "Closing Balance"):
-                    txn["payee"] = predict_payee(narration, client)
+                    txn["payee"] = ground_payee(predict_payee(narration, client), narration)
                 else:
                     txn["payee"] = ""
         empty = sum(1 for t in transactions if not t.get("payee"))

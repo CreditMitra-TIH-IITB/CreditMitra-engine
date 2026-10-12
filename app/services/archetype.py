@@ -67,12 +67,14 @@ def classify_archetype(features: FeatureVector, lifestyle: LifestyleProfile) -> 
     if lifestyle.l3_digital_maturity < 60:
         return CASH_RELIANT_INFORMAL
 
-    # 5. Gig Hustler — no formal employer salary, but real recurring
-    # income exists (gig-platform payouts, reinterpreted in
-    # feature_engineering.py), and the person transacts entirely digitally.
+    # 5. Gig Hustler — no formal employer salary, but recurring gig-platform
+    # payouts (reinterpreted in feature_engineering.py), and the person
+    # transacts entirely digitally. Requires the payouts themselves: any other
+    # non-salary inflow (family support, irregular freelance transfers) is not
+    # gig work, and used to land here simply because money came in.
     if (
         not features.salary_detected
-        and features.monthly_income > 0
+        and features.gig_income_detected
         and lifestyle.l3_digital_maturity >= 70
     ):
         return GIG_HUSTLER
