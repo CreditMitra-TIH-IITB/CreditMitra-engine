@@ -28,6 +28,15 @@ venv\Scripts\pip install -e ".[dev]"
 `scaler.joblib` is easy to miss; without it the classifier silently falls back
 to keyword heuristics.
 
+Then halve the classifier's memory (2.4 GB -> 1.2 GB, same labels, faster):
+
+```powershell
+venv\Scripts\pip install onnx                      # build-time only
+venv\Scripts\python scripts\quantize_classifier.py build
+```
+
+The engine uses `qwen3_embedding.fp16.onnx` whenever it exists.
+
 **3. Payee model in Ollama** — install [Ollama](https://ollama.com), then build
 the model from the merged checkpoint (`payee-merged`, from the finetune
 workflow) and a llama.cpp checkout:
