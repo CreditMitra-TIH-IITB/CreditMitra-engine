@@ -284,7 +284,13 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
             txn.get("payee", "") for txn in transactions if txn.get("payee_type") == "merchant"
         ]
         enrichment_service = get_enrichment_service()
-        enrichments = enrichment_service.enrich(merchant_names)
+        statement_id = None
+        if settings.MERCHANT_ENRICHMENT_URL:
+            from app.services.merchant_enrichment_client import statement_fingerprint
+
+            with open(pdf_path, "rb") as fh:
+                statement_id = statement_fingerprint(fh.read())
+        enrichments = enrichment_service.enrich(merchant_names, statement_id=statement_id)
         enrich_iter = iter(enrichments)
 
         for txn in transactions:
