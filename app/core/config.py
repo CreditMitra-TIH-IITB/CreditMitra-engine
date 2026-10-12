@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # --- enrichment tiers ---
     ENRICHMENT_LLM_ENABLED: bool = True
     ENRICHMENT_LLM_MODEL: str = "qwen2.5:1.5b-instruct"  # NOT payee-lora
+    # On-device fuzzy tier (app/services/merchant_vectors.py): near misses of a
+    # dictionary merchant. 0.75 = 0.3% false matches on local shops/people.
+    ENRICHMENT_VECTOR_ENABLED: bool = True
+    ENRICHMENT_VECTOR_THRESHOLD: float = 0.75
 
     # Tier 4: web search. OFF by default — it is the only tier that leaves
     # the device. Turn on only when you accept merchant names going out.
