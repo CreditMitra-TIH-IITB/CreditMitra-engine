@@ -33,8 +33,9 @@ Indian UPI data would be: fewer categories, no long tail, no resolution failures
 
 SANKC. UROK ("sanction interest") is charged when the account runs negative. It
 is a bank-generated distress marker, the same class of signal as a bounced ECS,
-so its narration is written to include "UNPAID" and it is therefore visible to
-Arm A. Withholding it would have starved the cash-flow baseline of the dataset's
+so its narration is written to include "INSUFFICIENT BALANCE" (it is charged on
+an overdrawn account) and it is therefore visible to Arm A through the engine's
+bounce detection. Withholding it would have starved the cash-flow baseline of the dataset's
 clearest distress signal and inflated the apparent merchant lift. This is a
 judgment call and a reviewer may reasonably want it re-run the other way —
 `treat_sanction_as_distress=False` does that.
@@ -150,7 +151,7 @@ def load(
             narration_parts.append(_K_SYMBOL_ENGLISH.get(k_symbol, k_symbol))
         if k_symbol == "SANKC. UROK" and treat_sanction_as_distress:
             # Bank-generated distress marker; see module docstring.
-            narration_parts.append("ACCOUNT UNPAID")
+            narration_parts.append("INSUFFICIENT BALANCE")
         if row.get("bank"):
             narration_parts.append(f"BANK {row['bank']}")
         narration = "/".join(p for p in narration_parts if p)

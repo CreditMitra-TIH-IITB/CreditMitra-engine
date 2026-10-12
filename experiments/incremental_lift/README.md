@@ -130,8 +130,8 @@ rather than quoting the headline C − A.
 ## Running it on real data
 
 ```bash
-python -m experiments.incremental_lift.run berka --data-dir path/to/pkdd99 \
-    --json-out results/berka.json
+python -m experiments.incremental_lift.run --json-out results/berka.json \
+    berka --data-dir path/to/pkdd99
 ```
 
 `berka.py` adapts the **PKDD'99 Financial Dataset**, which as far as I can
@@ -156,6 +156,33 @@ outbound network, so the mapping is written from the published schema and needs
 a first run against the real files before any number from it is quoted. Expect
 to fix small things.
 
+### Result (first run, 12 October 2026)
+
+620 loans, 63 defaults, transactions before each loan's start only:
+
+```
+arm                      features     AUC      KS
+A_cashflow_only                20   0.897   0.642
+B_plus_payee_identity          24   0.886   0.653
+C_plus_merchant_info           33   0.871   0.642
+
+whole merchant stack                      -0.026  [-0.049, -0.005]   p=0.014*
+payee extraction + classification only    -0.011  [-0.026, +0.002]   p=0.101
+enrichment tier on top                    -0.015  [-0.032, +0.000]   p=0.058
+```
+
+Withholding sanction interest from Arm A changes little (A 0.900, stack −0.039).
+Finished loans only (A vs B, 22 defaults): stack −0.012 [−0.061, +0.028] — too
+small to say anything.
+
+**Reading.** Cash flow alone reaches AUC ≈ 0.90; the six k_symbol categories add
+nothing on top, and their extra columns cost about what the null control
+predicts at ~60 defaults. This is the "already in the arithmetic" effect seen
+in the positive control, in real data. It is **not** evidence about merchant
+enrichment for Indian UPI statements: Berka has no merchant names, no long
+tail, and k_symbol mostly labels transfers the cash-flow arm already sees.
+The claim needs a dataset with real merchant categories and real defaults.
+
 ### What the Berka result will and will not mean
 
 Czech retail banking, 1993–1998, ~680 loans of which ~70–80 are defaults. At that
@@ -170,7 +197,8 @@ the persona suite, however well calibrated, can never provide.
 
 One mapping decision is worth challenging: `SANKC. UROK` (sanction interest,
 charged on a negative balance) is a bank-generated distress marker of the same
-class as a bounced ECS, so its narration includes `UNPAID` and Arm A can see it.
+class as a bounced ECS, so its narration includes `INSUFFICIENT BALANCE` and Arm A
+can see it.
 Withholding it would starve the cash-flow baseline of the dataset's clearest
 distress signal and inflate apparent merchant lift. `--no-sanction-distress`
 runs it the other way; reporting both is the honest thing to do.
