@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import statements
 from app.core.config import settings
+from app.services.task_store import fail_interrupted_tasks
 from app.services.warmup import start_warmup
 
 # Uvicorn configures only its own loggers, so the engine's INFO messages (task
@@ -28,6 +29,9 @@ faulthandler.enable()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    recovered = fail_interrupted_tasks()
+    if recovered:
+        _app_logger.warning(f"Marked {recovered} interrupted task(s) as failed")
     start_warmup()
     yield
 
