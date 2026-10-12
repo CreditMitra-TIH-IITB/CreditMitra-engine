@@ -624,7 +624,7 @@ class MerchantEnrichmentService:
         self._cache.put(normalized, fallback, source="unknown")
         return fallback
 
-    def enrich(self, names: list[str]) -> list[MerchantEnrichment]:
+    def enrich(self, names: list[str], statement_id: str | None = None) -> list[MerchantEnrichment]:
         """Batch, order-preserving. Deduped so 6 IRCTC rows = 1 lookup.
 
         The remote server is a *tier*, not a replacement. It used to be handed
@@ -657,7 +657,9 @@ class MerchantEnrichmentService:
             from app.services.merchant_enrichment_client import enrich_merchants_via_http
 
             pending = list(unresolved.items())
-            remote = enrich_merchants_via_http([original for _, original in pending])
+            remote = enrich_merchants_via_http(
+                [original for _, original in pending], statement_id=statement_id
+            )
             if remote is not None and len(remote) == len(pending):
                 for (normalized, _original), enrichment in zip(pending, remote, strict=True):
                     if enrichment.category != "other":

@@ -19,9 +19,15 @@ Content-Type: application/json
 ```
 
 ```json
-{ "merchants": ["Swiggy", "Jio", "IRCTC"] }
+{ "merchants": ["Swiggy", "Jio", "IRCTC"], "statement_id": "9f2c…(64 hex)" }
 ```
 
+- `statement_id` — optional, opaque: HMAC-SHA256 of the statement file under a
+  random per-install secret that never leaves the device
+  (`merchant_enrichment_client.statement_fingerprint`). The server stores only a
+  hash of it, to count unresolved names per *distinct statement* — its privacy
+  gate before any name is proposed to external models. It reveals nothing about
+  the statement and cannot be checked against a guessed file without the secret.
 - `merchants` — a flat list of merchant NAME strings, in the order enrichment
   is wanted. Names may be truncated/abbreviated (as UPI narrations produce
   them, e.g. `"SWIGGY LI"`, `"FLIPKAR T"`) — the server applies the same
@@ -99,7 +105,8 @@ above, not surfaced as partial errors.
 
 ## Privacy guarantee
 
-The request body contains **merchant name strings and nothing else.** No
+The request body contains **merchant name strings and an optional opaque
+statement fingerprint, nothing else.** No
 transaction narrations, amounts, dates, balances, or person-classified
 payees ever leave the device/process boundary. `payee_type == "person"` rows
 must be filtered out by the caller before building the `merchants` list —
