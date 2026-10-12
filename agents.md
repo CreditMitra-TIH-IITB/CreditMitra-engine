@@ -71,8 +71,8 @@ deploy/                         # docker-compose for the whole stack
 
 ### Storage
 - Task results are files via `task_store.py` (JSON, or Fernet-encrypted when
-  `TASK_ENCRYPTION_KEY` is set). Do not add an ORM or a database server. The SQLite enrichment cache is derived data and may be
-  rebuilt at any time.
+  `TASK_ENCRYPTION_KEY` is set). Do not add an ORM or a database server. The
+  SQLite enrichment cache is derived data and may be rebuilt at any time.
 
 ### Merchant labels
 - `is_essential`, `lifestyle_dim` and `risk_flag` are derived from `category`
