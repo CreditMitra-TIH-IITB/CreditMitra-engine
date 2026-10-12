@@ -48,6 +48,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.schemas.statements import LifestyleDim, MerchantEnrichment, RiskFlag
+from app.services.merchant_vectors import MerchantVectorIndex
 
 logger = logging.getLogger(__name__)
 
@@ -577,8 +578,24 @@ def _coerce(result: Any, name: str) -> MerchantEnrichment:
 class MerchantEnrichmentService:
     def __init__(self) -> None:
         self._dictionary = _Dictionary()
+        self._vectors = MerchantVectorIndex(
+            self._dictionary._by_alias, exclude_categories=_HIGH_SEVERITY_CATEGORIES
+        )
         self._cache = _Cache(_CACHE_PATH, self._dictionary.version)
         self._fallback = _LLMFallback()
+
+    def _lookup_local(self, normalized: str) -> tuple[MerchantEnrichment, str] | None:
+        """Dictionary, then the on-device vector index for near misses."""
+        hit = self._dictionary.lookup(normalized)
+        if hit is not None:
+            return hit, "dictionary"
+        if getattr(settings, "ENRICHMENT_VECTOR_ENABLED", True):
+            near = self._vectors.match(
+                normalized, getattr(settings, "ENRICHMENT_VECTOR_THRESHOLD", 0.75)
+            )
+            if near is not None:
+                return near, "vector"
+        return None
 
     def _resolve_offline(self, name: str) -> MerchantEnrichment | None:
         """Cache then dictionary — the tiers that cost nothing and send nothing.
@@ -589,10 +606,10 @@ class MerchantEnrichmentService:
         cached = self._cache.get(normalized)
         if cached is not None and cached.category != "other":
             return cached
-        hit = self._dictionary.lookup(normalized)
-        if hit is not None:
-            self._cache.put(normalized, hit, source="dictionary")
-            return hit
+        local = self._lookup_local(normalized)
+        if local is not None:
+            self._cache.put(normalized, local[0], source=local[1])
+            return local[0]
         return None
 
     def enrich_one(self, name: str) -> MerchantEnrichment:
@@ -605,11 +622,11 @@ class MerchantEnrichmentService:
         if cached is not None:
             return cached
 
-        # 2. dictionary
-        hit = self._dictionary.lookup(normalized)
-        if hit is not None:
-            self._cache.put(normalized, hit, source="dictionary")
-            return hit
+        # 2. dictionary, then near misses via the vector index
+        local = self._lookup_local(normalized)
+        if local is not None:
+            self._cache.put(normalized, local[0], source=local[1])
+            return local[0]
 
         # 3. web-search-grounded fallback (Issue #7b) — no-op unless
         # ENRICHMENT_WEBSEARCH_ENABLED + LANGSEARCH_API_KEY are both set.
