@@ -6,10 +6,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Credit Mitra API"
     API_V1_STR: str = "/api/v1"
+    LOG_LEVEL: str = "INFO"
 
     # Ollama settings
     OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "payee-lora:latest")
+    # How long Ollama keeps the payee model resident after a request. Its own
+    # default is 5 minutes, after which the next statement pays the full load.
+    OLLAMA_KEEP_ALIVE: str = "30m"
+    # Load the payee model and the ONNX classifier in the background at startup,
+    # so the first statement does not wait ~45s + ~75s for cold loads.
+    WARMUP_ON_STARTUP: bool = True
     # --- enrichment tiers ---
     ENRICHMENT_LLM_ENABLED: bool = True
     ENRICHMENT_LLM_MODEL: str = "qwen2.5:1.5b-instruct"  # NOT payee-lora

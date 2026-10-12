@@ -1,5 +1,7 @@
 import logging
+import os
 import re
+import time
 from typing import Any
 
 import httpx
@@ -44,6 +46,7 @@ def predict_payee(narration: str, client: httpx.Client) -> str:
         "prompt": build_prompt(narration),
         "stream": False,
         "raw": True,
+        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
         "options": {"temperature": 0, "num_predict": 32},
     }
     try:
@@ -196,8 +199,14 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
     try:
         update_task_status(task_id, "processing")
 
+        started = time.monotonic()
+
         # 1. Extract tables via Docling (with pdfplumber fallback)
         transactions = extract_transactions(pdf_path)
+        logger.info(
+            f"Task {task_id}: extracted {len(transactions)} rows"
+            f" in {time.monotonic() - started:.0f}s"
+        )
 
         # 2. Enrich via Ollama
         with httpx.Client(timeout=120.0) as client:
@@ -207,14 +216,25 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
                     txn["payee"] = predict_payee(narration, client)
                 else:
                     txn["payee"] = ""
+        empty = sum(1 for t in transactions if not t.get("payee"))
+        logger.info(
+            f"Task {task_id}: payees predicted at {time.monotonic() - started:.0f}s ({empty} empty)"
+        )
 
         # 3. Classify payees as person/merchant
         from app.services.merchant_classifier import MerchantClassifierService
 
         classifier = MerchantClassifierService.get_instance()
         payee_targets = [txn.get("payee") or txn.get("particulars", "") for txn in transactions]
-        classifications = classifier.classify_batch(payee_targets)
-        for txn, cls_result in zip(transactions, classifications, strict=False):
+        # Classify each distinct name once. Payees repeat heavily across a
+        # statement (a real 220-row statement had 103), and every ONNX
+        # embedding costs ~0.4s on CPU.
+        unique_targets = list(dict.fromkeys(payee_targets))
+        by_target = dict(
+            zip(unique_targets, classifier.classify_batch(unique_targets), strict=True)
+        )
+        for txn, target in zip(transactions, payee_targets, strict=True):
+            cls_result = by_target[target]
             txn["payee_type"] = cls_result["label"]
             txn["payee_confidence"] = cls_result["confidence"]
 
@@ -263,7 +283,21 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
             transactions=transactions,
             report=report_data,
         )
+        logger.info(
+            f"Task {task_id}: completed in {time.monotonic() - started:.0f}s,"
+            f" report={'yes' if report else 'none'}"
+        )
 
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}", exc_info=True)
         update_task_status(task_id, "failed", error=str(e))
+
+    finally:
+        # The upload is a user's bank statement. Once extracted, nothing reads
+        # it again, so it must not outlive the task — success or failure.
+        try:
+            os.remove(pdf_path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.error(f"Task {task_id}: could not delete upload {pdf_path}: {e}")

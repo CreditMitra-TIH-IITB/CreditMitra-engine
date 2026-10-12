@@ -94,6 +94,9 @@ _CATEGORY_TAXONOMY: dict[str, tuple[bool, LifestyleDim, RiskFlag | None]] = {
     "other": (False, "neutral", None),
 }
 _VALID_CATEGORIES = set(_CATEGORY_TAXONOMY)
+# Labels that materially harm a borrower when wrong (mirrors the merchant
+# server's taxonomy.HIGH_SEVERITY_CATEGORIES).
+_HIGH_SEVERITY_CATEGORIES = {"gambling", "bnpl_lending", "crypto", "loan_emi"}
 _VALID_RECUR = {"adhoc", "subscription", "emi_like", "payout_source"}
 
 
@@ -185,14 +188,24 @@ class _Dictionary:
         # prefix — handles truncation: "swiggy li" matches alias "swiggy li",
         # but "flipkar" (cut even shorter) should still find "flipkart".
         # Only match aliases >= 4 chars to avoid "jio" matching everything.
+        # Longest alias wins, so a specific entry is not swallowed by a shorter
+        # one that happens to load first.
+        best: tuple[int, MerchantEnrichment] | None = None
         for alias, enrichment in self._by_alias.items():
-            if (
-                len(alias) >= 4
-                and len(normalized) >= 4
-                and (normalized.startswith(alias) or alias.startswith(normalized))
-            ):
-                return enrichment
-        return None
+            if len(alias) < 4 or len(normalized) < 4:
+                continue
+            truncation_of_alias = alias.startswith(normalized)
+            extends_alias = normalized.startswith(alias)
+            # A high-severity label must not be reached by a longer name that
+            # merely begins with the alias: "navin kumar" is not Navi, "simple
+            # mart" is not Simpl, "kuber stores" is not CoinSwitch Kuber. A wrong
+            # gambling/BNPL/crypto tag drags L5/L6 down and can flip the
+            # archetype, so these resolve on an exact or truncated match only.
+            if enrichment.category in _HIGH_SEVERITY_CATEGORIES:
+                extends_alias = False
+            if (truncation_of_alias or extends_alias) and (best is None or len(alias) > best[0]):
+                best = (len(alias), enrichment)
+        return best[1] if best else None
 
     def is_gig_source(self, normalized: str) -> bool:
         return any(

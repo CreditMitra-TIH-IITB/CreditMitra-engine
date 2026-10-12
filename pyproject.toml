@@ -28,6 +28,9 @@ dependencies = [
     "onnxruntime>=1.17.0",
     "transformers>=4.40.0",
     "joblib>=1.3.0",
+    # scaler.joblib is a pickled sklearn StandardScaler; without sklearn it
+    # fails to load and the classifier silently falls back to heuristics.
+    "scikit-learn>=1.3.0",
     "numpy>=1.24.0",
 ]
 

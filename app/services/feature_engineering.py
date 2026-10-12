@@ -115,14 +115,21 @@ def _detect_recurring_income(credits: list[Transaction]) -> tuple[bool, float]:
     >=2 distinct months, amounts within tolerance of each other, is treated
     as a salary-like recurring income source. Returns (found, avg_amount).
 
-    Restricted to non-merchant payees (an employer, not a business). A gig
-    platform (Swiggy/Uber/Ola/...) can just as easily pay out on a
-    recurring monthly-ish cadence — that's gig income, handled separately
-    by _detect_gig_income, and must not get mislabelled as "salary".
+    Gig payout sources are excluded: a gig platform (Swiggy/Uber/Ola/...) can
+    just as easily pay out on a recurring monthly-ish cadence — that's gig
+    income, handled separately by _detect_gig_income, and must not get
+    mislabelled as "salary".
+
+    Excluding every merchant-classified payee instead, as this used to, ruled
+    out salary for nearly everyone: an employer is a company, and the
+    classifier correctly calls "ACME Software Pvt Ltd" a merchant. The persona
+    fixtures hand-label the employer as a person, which is why only an
+    end-to-end run showed it.
     """
+    service = get_enrichment_service()
     by_payee: dict[str, list[Transaction]] = defaultdict(list)
     for t in credits:
-        if t.payee_type == "merchant":
+        if t.payee and service.is_gig_payout_source(t.payee):
             continue
         key = (t.payee or "").strip().lower()
         if key:

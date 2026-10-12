@@ -55,3 +55,6 @@ ehthumbs.db
 
 # ─── Docker ──────────────────────────────────────────────
 docker-compose.override.yml
+
+# Synthetic statements rendered by scripts/make_sample_statements.py
+data/sample_statements/
