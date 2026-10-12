@@ -7,14 +7,22 @@ which is what an incremental-lift experiment needs. Aggregate credit datasets
 pre-summarised features with no payee or category field, so there is nothing for
 merchant enrichment to act on and no ablation to run.
 
-    Source:  https://sorry.vse.cz/~berka/challenge/pkdd1999/
+    Source:  https://web.archive.org/web/20180506061559/http://lisp.vse.cz/pkdd99/DATA/data_berka.zip
+             (the original PKDD'99 archive; the challenge's own host is gone)
     Files:   trans.asc, loan.asc  (semicolon-separated, quoted)
     Licence: released for the PKDD'99 Discovery Challenge; check terms before
              redistributing the raw files.
 
 Outcome. loan.status is A/B/C/D — A finished-and-repaid, B finished-and-defaulted,
-C running-and-current, D running-and-in-debt. Default = {B, D}, the standard
-treatment for this dataset.
+C running-and-current, D running-and-in-debt. Default = {B, D} by default;
+`finished_only=True` restricts to A vs B, the formulation the CTU relational
+repository calls standard.
+
+Temporal cutoff. Only transactions dated *before* loan.date are used — what a
+lender would have seen when deciding. Without it the experiment leaks the
+outcome: per the CTU repository, if min(trans.balance) >= 0 over the *whole*
+history then good, else bad, separates good from bad loans perfectly, because
+defaulting borrowers run their accounts negative after the loan starts.
 
 --- Mapping decisions, stated so they can be challenged -------------------------
 
@@ -112,7 +120,10 @@ def _read(path: Path) -> list[dict[str, str]]:
 
 
 def load(
-    data_dir: Path | str, treat_sanction_as_distress: bool = True, min_transactions: int = 20
+    data_dir: Path | str,
+    treat_sanction_as_distress: bool = True,
+    min_transactions: int = 20,
+    finished_only: bool = False,
 ) -> Dataset:
     data_dir = Path(data_dir)
     transactions_raw = _read(data_dir / "trans.asc")
@@ -176,14 +187,17 @@ def load(
 
     statements: list[LabelledStatement] = []
     skipped = 0
+    statuses = {"A", "B"} if finished_only else {"A", "B", "C", "D"}
     for loan in loans_raw:
         account_id = loan["account_id"]
-        rows = by_account.get(account_id, [])
-        if len(rows) < min_transactions:
+        loan_date = _parse_date(loan.get("date", ""))
+        status = (loan.get("status") or "").strip().upper()
+        if loan_date is None or status not in statuses:
             skipped += 1
             continue
-        status = (loan.get("status") or "").strip().upper()
-        if status not in {"A", "B", "C", "D"}:
+        # The decision-time view only: nothing on or after the loan's start.
+        rows = [t for t in by_account.get(account_id, []) if t.txn_date and t.txn_date < loan_date]
+        if len(rows) < min_transactions:
             skipped += 1
             continue
         rows.sort(key=lambda t: t.txn_date or date.min)
@@ -203,5 +217,7 @@ def load(
         "output; there is no merchant long tail and no resolution failure to model.",
         f"{len(statements)} loans used, {skipped} skipped for missing or short histories.",
         f"Sanction interest treated as a cash-flow distress marker: {treat_sanction_as_distress}.",
+        "Only transactions before each loan's start date are used (no outcome leakage).",
+        "Outcome: A vs B (finished loans)" if finished_only else "Outcome: {B, D} vs {A, C}.",
     )
     return Dataset(name="pkdd99-berka", statements=statements, caveats=caveats)

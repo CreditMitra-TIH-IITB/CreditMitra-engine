@@ -105,6 +105,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="withhold sanction interest from the cash-flow baseline (see berka.py)",
     )
+    ber.add_argument(
+        "--finished-only",
+        action="store_true",
+        help="A vs B on finished loans only (the CTU repository's standard task)",
+    )
 
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument(
@@ -125,7 +130,9 @@ def main(argv: list[str] | None = None) -> int:
         from . import berka
 
         dataset = berka.load(
-            args.data_dir, treat_sanction_as_distress=not args.no_sanction_distress
+            args.data_dir,
+            treat_sanction_as_distress=not args.no_sanction_distress,
+            finished_only=args.finished_only,
         )
 
     results = run(dataset, n_folds=args.folds, l2=args.l2)
