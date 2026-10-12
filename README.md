@@ -148,12 +148,9 @@ The API is now available at **http://127.0.0.1:8000** with interactive docs
 
 ## Docker
 
-```bash
-docker build -t creditmitra-engine .
-docker run -p 8000:8000 creditmitra-engine
-```
-
-> **Note:** Ollama must be reachable from inside the container. Use `--network host` or set `OLLAMA_HOST` to the host machine's IP.
+The whole stack (engine, merchant server, dashboard, optional Ollama) runs from
+[`deploy/docker-compose.yml`](deploy/docker-compose.yml) — see
+[`docs/DEPLOY.md`](docs/DEPLOY.md) for prerequisites, volumes, and privacy notes.
 
 ---
 

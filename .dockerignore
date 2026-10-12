@@ -7,11 +7,15 @@
 .pytest_cache
 __pycache__
 *.pyc
-data/
+# Runtime data and models stay out; the image needs only the reference files.
+data/*
+!data/india_merchants.json
+!data/person_name_tokens.txt
 venv/
 .venv/
 .env
 *.md
+!README.md
 *.egg-info
 dist/
 build/
@@ -19,3 +23,6 @@ build/
 .pre-commit-config.yaml
 .gitignore
 agents.md
+deploy/
+scripts/
+tests/

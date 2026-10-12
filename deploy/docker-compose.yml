@@ -1,0 +1,80 @@
+# CreditMitra — engine, merchant server, and dashboard in containers.
+#
+#   cd deploy
+#   cp .env.example .env              # set MERCHANT_API_KEY
+#   docker compose up --build
+#
+# Expects the repositories side by side:
+#   CreditMitra-engine/            (this repo — compose lives in deploy/)
+#   CreditMitra-dashboard/
+#   CreditMitra-merchant-server/
+#
+# The payee model runs in Ollama. By default the engine uses the Ollama already
+# running on the host (it can use the host GPU); `--profile ollama` runs Ollama
+# in a container instead. See docs/DEPLOY.md.
+
+services:
+  engine:
+    build: ..
+    ports:
+      - "8000:8000"
+    environment:
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-payee-lora:latest}
+      MERCHANT_ENRICHMENT_URL: http://merchant-server:8001
+      MERCHANT_API_KEY: ${MERCHANT_API_KEY:?set MERCHANT_API_KEY in deploy/.env}
+      CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+    volumes:
+      # Classifier models are not in git (see data/models/README.md).
+      - ../data/models:/app/data/models:ro
+      # Task results, the fingerprint secret, and the Docling model cache.
+      - engine-state:/app/state
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      merchant-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  merchant-server:
+    build: ../../CreditMitra-merchant-server
+    environment:
+      MERCHANT_API_KEY: ${MERCHANT_API_KEY:?set MERCHANT_API_KEY in deploy/.env}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LANGSEARCH_API_KEY: ${LANGSEARCH_API_KEY:-}
+      MERCHANT_MIN_STATEMENT_COUNT: ${MERCHANT_MIN_STATEMENT_COUNT:-3}
+    volumes:
+      # The live dictionary (the proposer writes promotions into it), the
+      # cache, and the curation ledger. Seeded from the image on first start.
+      - merchant-data:/app/data
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ../../CreditMitra-dashboard
+      args:
+        # Baked into the bundle at build time; the browser calls the engine
+        # directly on the host-mapped port.
+        VITE_API_BASE_URL: ${DASHBOARD_API_BASE_URL:-http://localhost:8000/api/v1}
+    ports:
+      - "8080:80"
+    depends_on:
+      - engine
+    restart: unless-stopped
+
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+      # Directory holding payee-q8_0.gguf (from scripts/build_payee_model.ps1).
+      - ${PAYEE_GGUF_DIR:-../../outputs}:/gguf:ro
+      - ./ollama:/modelfiles:ro
+    restart: unless-stopped
+
+volumes:
+  engine-state:
+  merchant-data:
+  ollama-models:
