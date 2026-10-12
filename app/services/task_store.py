@@ -1,27 +1,107 @@
+"""Task persistence: one file per task under DATA_DIR/tasks.
+
+Results hold a borrower's whole statement — every transaction, payee and the
+credit report — so two protections are available, both opt-in so an existing
+install is never changed underneath its owner:
+
+* Encryption at rest (`TASK_ENCRYPTION_KEY`, a Fernet key). Encrypted results
+  are written as `<task_id>.enc`; plain `<task_id>.json` files from before the
+  key was set stay readable and are re-written encrypted the next time they
+  change.
+* Retention (`RESULT_RETENTION_DAYS`). Results older than that are deleted at
+  startup and before each new upload. Uploaded PDFs are not touched here — they
+  are deleted when their task finishes.
+"""
+
+from __future__ import annotations
+
 import json
+import logging
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
+from cryptography.fernet import Fernet, InvalidToken
+
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+_PLAIN = ".json"
+_ENCRYPTED = ".enc"
+
+
+def _tasks_dir() -> Path:
+    return Path(settings.DATA_DIR) / "tasks"
+
+
+def _fernet() -> Fernet | None:
+    key = settings.TASK_ENCRYPTION_KEY.strip()
+    return Fernet(key.encode()) if key else None
+
+
+def check_encryption_key() -> None:
+    """Fail fast at startup on a malformed key, rather than at the first save
+    — where a task would fail, or worse, results would silently go unencrypted."""
+    try:
+        _fernet()
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError(
+            "TASK_ENCRYPTION_KEY is not a valid Fernet key. Generate one with: python -c "
+            '"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+        ) from exc
+
+
+def _valid_task_id(task_id: str) -> bool:
+    # Task ids are UUIDs minted by the upload endpoint. Anything else reaching
+    # here came from a URL and must not become part of a file path.
+    try:
+        return str(uuid.UUID(task_id)) == task_id
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 def get_task_file_path(task_id: str) -> Path:
-    return Path(settings.DATA_DIR) / "tasks" / f"{task_id}.json"
+    """Where the task is (or would be) stored under the current settings."""
+    suffix = _ENCRYPTED if _fernet() else _PLAIN
+    return _tasks_dir() / f"{task_id}{suffix}"
+
+
+def _read(path: Path) -> dict[str, Any] | None:
+    raw = path.read_bytes()
+    if path.suffix == _ENCRYPTED:
+        fernet = _fernet()
+        if fernet is None:
+            logger.error(f"{path.name} is encrypted but TASK_ENCRYPTION_KEY is not set")
+            return None
+        try:
+            raw = fernet.decrypt(raw)
+        except InvalidToken:
+            logger.error(f"{path.name} cannot be decrypted with the configured key")
+            return None
+    result: dict[str, Any] = json.loads(raw.decode("utf-8"))
+    return result
 
 
 def save_task(task_id: str, data: dict[str, Any]) -> None:
+    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    fernet = _fernet()
     path = get_task_file_path(task_id)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    path.write_bytes(fernet.encrypt(payload) if fernet else payload)
+    if fernet:
+        # A plain copy from before encryption was enabled must not outlive it.
+        (_tasks_dir() / f"{task_id}{_PLAIN}").unlink(missing_ok=True)
 
 
 def get_task(task_id: str) -> dict[str, Any] | None:
-    path = get_task_file_path(task_id)
-    if not path.exists():
+    if not _valid_task_id(task_id):
         return None
-    with open(path, encoding="utf-8") as f:
-        result: dict[str, Any] = json.load(f)
-        return result
+    for suffix in (_ENCRYPTED, _PLAIN):
+        path = _tasks_dir() / f"{task_id}{suffix}"
+        if path.exists():
+            return _read(path)
+    return None
 
 
 def update_task_status(task_id: str, status: str, **kwargs: Any) -> None:
@@ -32,6 +112,11 @@ def update_task_status(task_id: str, status: str, **kwargs: Any) -> None:
     for k, v in kwargs.items():
         task_data[k] = v
     save_task(task_id, task_data)
+
+
+def _task_files() -> list[Path]:
+    tasks_dir = _tasks_dir()
+    return [*tasks_dir.glob(f"*{_PLAIN}"), *tasks_dir.glob(f"*{_ENCRYPTED}")]
 
 
 INTERRUPTED_ERROR = (
@@ -48,16 +133,14 @@ def fail_interrupted_tasks() -> int:
     upload — a bank statement the crash kept from being cleaned up — is deleted
     too. Uploads belonging to finished tasks are not touched.
     """
-    tasks_dir = Path(settings.DATA_DIR) / "tasks"
     uploads_dir = Path(settings.DATA_DIR) / "uploads"
     recovered = 0
-    for path in tasks_dir.glob("*.json"):
+    for path in _task_files():
         try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+            data = _read(path)
         except (OSError, ValueError):
             continue
-        if data.get("status") not in ("pending", "processing"):
+        if not data or data.get("status") not in ("pending", "processing"):
             continue
         task_id = path.stem
         data["status"] = "failed"
@@ -67,3 +150,24 @@ def fail_interrupted_tasks() -> int:
             upload.unlink(missing_ok=True)
         recovered += 1
     return recovered
+
+
+def purge_expired_results() -> int:
+    """Delete task results older than RESULT_RETENTION_DAYS (0 keeps them all).
+
+    Age is the file's last write, i.e. when the task last changed state. Only
+    result files are removed; uploads are handled by the task lifecycle.
+    """
+    days = settings.RESULT_RETENTION_DAYS
+    if days <= 0:
+        return 0
+    cutoff = time.time() - days * 86400
+    removed = 0
+    for path in _task_files():
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed

@@ -70,8 +70,8 @@ deploy/                         # docker-compose for the whole stack
   `test_healthcare_spend_never_changes_the_score` enforces it.
 
 ### Storage
-- Task results are JSON files via `task_store.py`. Do not add an ORM or a
-  database server. The SQLite enrichment cache is derived data and may be
+- Task results are files via `task_store.py` (JSON, or Fernet-encrypted when
+  `TASK_ENCRYPTION_KEY` is set). Do not add an ORM or a database server. The SQLite enrichment cache is derived data and may be
   rebuilt at any time.
 
 ### Merchant labels
@@ -117,6 +117,8 @@ Task lifecycle: `pending → processing → completed | failed`.
 | `MERCHANT_ENRICHMENT_URL` / `MERCHANT_API_KEY` | — | Merchant server tier |
 | `CORS_ORIGINS` / `CORS_ORIGIN_REGEX` | Vite dev origins + `tauri://localhost` | Never a wildcard |
 | `DATA_DIR` | `./data` | Tasks, uploads, fingerprint secret |
+| `TASK_ENCRYPTION_KEY` | — | Fernet key; set → results stored encrypted (`.enc`) |
+| `RESULT_RETENTION_DAYS` | `0` | Delete results older than N days (0 = keep) |
 | `LOG_LEVEL` | `INFO` | `app.*` loggers |
 
 ---

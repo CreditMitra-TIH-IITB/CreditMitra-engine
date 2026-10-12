@@ -31,6 +31,8 @@ dependencies = [
     # scaler.joblib is a pickled sklearn StandardScaler; without sklearn it
     # fails to load and the classifier silently falls back to heuristics.
     "scikit-learn>=1.3.0",
+    # Encryption of task results at rest (TASK_ENCRYPTION_KEY).
+    "cryptography>=42.0.0",
     "numpy>=1.24.0",
 ]
 
