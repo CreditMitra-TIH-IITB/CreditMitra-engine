@@ -158,3 +158,53 @@ def test_interrupted_tasks_are_failed_and_their_uploads_removed(
     assert stuck["error"] == task_store.INTERRUPTED_ERROR
     assert not stuck_upload.exists()
     assert done_upload.exists()  # finished tasks' files are never touched
+
+
+# --- fair lending -------------------------------------------------------------
+
+
+def _report(txns: list[Transaction]) -> Any:
+    from app.services.credit_scorer import score
+    from app.services.lifestyle_profile import build_profile
+
+    features = build_features(txns)
+    profile = build_profile(txns, features)
+    return score(features, profile, classify_archetype(features, profile))
+
+
+@pytest.mark.parametrize("persona", ["01_salaried_saver", "02_gig_hustler", "07_frequent_bouncer"])
+def test_healthcare_spend_never_changes_the_score(persona: str) -> None:
+    """docs/taxonomy.md: illness must never lower a credit score. Heavy medical
+    bills on dates the statement already covers must leave every feature,
+    index and the score exactly as they were."""
+    fixtures = Path(__file__).parent / "fixtures" / "personas"
+    rows = json.loads((fixtures / f"{persona}.json").read_text(encoding="utf-8"))
+    base = [Transaction(**r) for r in rows]
+    dated = [t for t in base if t.txn_date]
+
+    medical = [
+        Transaction(
+            particulars="UPI/DR/1/APOLLO HOSPITALS/HDFC/x",
+            payee="Apollo Hospitals",
+            payee_type="merchant",
+            txn_date=t.txn_date,
+            amount=45000.0,
+            direction="debit",
+            balance_val=t.balance_val,
+            category="healthcare",
+            is_essential=True,
+            lifestyle_dim="essential",
+            recurring_type="adhoc",
+        )
+        for t in dated[::10]
+    ]
+
+    before, after = _report(base), _report(base + medical)
+
+    assert after.score == before.score
+    assert after.archetype == before.archetype
+    assert after.lifestyle.model_dump(exclude={"archetype"}) == before.lifestyle.model_dump(
+        exclude={"archetype"}
+    )
+    fields = set(FeatureVector.model_fields) - {"txn_count"}
+    assert after.features.model_dump(include=fields) == before.features.model_dump(include=fields)
