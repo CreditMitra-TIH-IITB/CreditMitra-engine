@@ -63,3 +63,24 @@ jobs:
 
       - name: Run tests
         run: pytest --tb=short -q
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build -t creditmitra-engine:ci .
+
+      # No models or Ollama in CI: the engine must still boot, answer /health,
+      # and degrade (heuristic classifier, empty payees) rather than crash.
+      - name: Smoke test
+        run: |
+          docker run -d --name engine -p 8000:8000 creditmitra-engine:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health; then exit 0; fi
+            sleep 2
+          done
+          docker logs engine
+          exit 1

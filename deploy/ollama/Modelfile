@@ -1,0 +1,13 @@
+# Payee model for the containerised Ollama (compose profile "ollama").
+#   docker compose --profile ollama exec ollama ollama create payee-lora -f /modelfiles/Modelfile
+FROM /gguf/payee-q8_0.gguf
+
+PARAMETER temperature 0
+PARAMETER num_ctx 4096
+
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}
+{{ end }}<|im_start|>assistant
+"""
