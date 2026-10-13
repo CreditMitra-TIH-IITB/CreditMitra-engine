@@ -171,3 +171,54 @@ def purge_expired_results() -> int:
         except OSError:
             continue
     return removed
+
+
+def get_engine_stats() -> dict[str, Any]:
+    """Scan stored tasks to calculate total statements processed, total transactions,
+    average turnaround time, and list recent statements."""
+    total_statements = 0
+    total_txns = 0
+    total_time = 0.0
+    recent: list[dict[str, Any]] = []
+
+    files = _task_files()
+    sorted_files = sorted(
+        files, key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True
+    )
+
+    for path in sorted_files:
+        try:
+            data = _read(path)
+            if not data or data.get("status") != "completed":
+                continue
+            txns = data.get("transactions") or []
+            txn_count = len(txns)
+            total_statements += 1
+            total_txns += txn_count
+            proc_time = data.get("elapsed_seconds") or 0.0
+            if proc_time > 0:
+                total_time += proc_time
+
+            report = data.get("report") or {}
+            if len(recent) < 10:
+                recent.append({
+                    "task_id": data.get("task_id", path.stem),
+                    "status": "completed",
+                    "filename": data.get("filename"),
+                    "created_at": path.stat().st_mtime,
+                    "transaction_count": txn_count,
+                    "score": report.get("score"),
+                    "band": report.get("band"),
+                    "archetype": report.get("archetype"),
+                    "processing_time_seconds": round(proc_time, 1) if proc_time else None,
+                })
+        except Exception:
+            continue
+
+    avg_time = round(total_time / total_statements, 1) if total_statements > 0 else 0.0
+    return {
+        "total_statements_processed": total_statements,
+        "total_transactions_analyzed": total_txns,
+        "avg_processing_time_seconds": avg_time,
+        "recent_statements": recent,
+    }
