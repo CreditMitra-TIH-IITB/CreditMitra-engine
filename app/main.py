@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import statements
+from app.api.v1 import statements, system
 from app.core.config import settings
 from app.services.task_store import (
     check_encryption_key,
@@ -69,6 +69,9 @@ app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 app.include_router(
     statements.router, prefix=f"{settings.API_V1_STR}/statements", tags=["statements"]
+)
+app.include_router(
+    system.router, prefix=f"{settings.API_V1_STR}/system", tags=["system"]
 )
 
 
