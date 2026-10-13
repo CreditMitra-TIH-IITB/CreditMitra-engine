@@ -327,41 +327,110 @@ def extract_transactions(pdf_path: str) -> list[dict[str, Any]]:
     return rows
 
 
-def process_pdf_task(task_id: str, pdf_path: str) -> None:
-    """Background task to process the PDF and update the task store."""
+def process_pdf_task(task_id: str, pdf_path: str, filename: str | None = None) -> None:
+    """Background task to process the PDF and update the task store with live telemetry."""
     try:
-        update_task_status(task_id, "processing")
-
         started = time.monotonic()
+        clean_filename = filename or os.path.basename(pdf_path)
 
-        # 1. Extract tables via Docling (with pdfplumber fallback)
-        transactions = extract_transactions(pdf_path)
-        logger.info(
-            f"Task {task_id}: extracted {len(transactions)} rows"
-            f" in {time.monotonic() - started:.0f}s"
+        # 1. Start extraction
+        update_task_status(
+            task_id,
+            "processing",
+            stage="extracting",
+            stage_index=1,
+            stage_name="PDF Table Extraction (Docling)",
+            progress=10.0,
+            message="Initializing Docling visual engine and parsing table boundaries...",
+            filename=clean_filename,
+            started_at=started,
+            elapsed_seconds=0.0,
+            eta_seconds=25.0,
+            processed_rows=0,
+            total_rows=0,
         )
 
-        # 2. Enrich via Ollama
+        transactions = extract_transactions(pdf_path)
+        total_txns = len(transactions)
+        extract_elapsed = time.monotonic() - started
+        logger.info(
+            f"Task {task_id}: extracted {total_txns} rows in {extract_elapsed:.1f}s"
+        )
+
+        # 2. Enrich via Ollama (payee-lora) with live row-by-row progress & ETA
+        update_task_status(
+            task_id,
+            "processing",
+            stage="payees",
+            stage_index=2,
+            stage_name="Payee Normalization (payee-lora)",
+            progress=25.0,
+            message=f"Extracted {total_txns} transaction rows. Beginning payee resolution...",
+            total_rows=total_txns,
+            processed_rows=0,
+            elapsed_seconds=round(time.monotonic() - started, 1),
+            eta_seconds=round(max(5.0, total_txns * 0.35), 1),
+        )
+
+        payees_started = time.monotonic()
         with httpx.Client(timeout=120.0) as client:
-            for txn in transactions:
+            for idx, txn in enumerate(transactions):
                 narration = txn.get("particulars", "")
                 if narration and narration not in ("Opening Balance", "Closing Balance"):
                     txn["payee"] = ground_payee(predict_payee(narration, client), narration)
                 else:
                     txn["payee"] = ""
+
+                rows_done = idx + 1
+                # Update progress every 4 rows or on the very last row, or every row if small
+                if rows_done % 4 == 0 or rows_done == total_txns or total_txns <= 12:
+                    elapsed = time.monotonic() - started
+                    payees_elapsed = time.monotonic() - payees_started
+                    rate = rows_done / payees_elapsed if payees_elapsed > 0 else 1.0
+                    remaining = total_txns - rows_done
+                    eta = max(1.0, remaining / rate) if remaining > 0 else 3.0
+                    # Scale progress from 25% to 70% during payee resolution
+                    progress_pct = round(25.0 + (rows_done / total_txns) * 45.0, 1)
+
+                    update_task_status(
+                        task_id,
+                        "processing",
+                        stage="payees",
+                        stage_index=2,
+                        stage_name="Payee Normalization (payee-lora)",
+                        progress=min(70.0, progress_pct),
+                        message=f"Resolving payees: {rows_done}/{total_txns} rows completed ({rate:.1f} rows/s)",
+                        total_rows=total_txns,
+                        processed_rows=rows_done,
+                        elapsed_seconds=round(elapsed, 1),
+                        eta_seconds=round(eta + 4.0, 1),
+                        current_narration=narration[:55] if narration else None,
+                    )
+
         empty = sum(1 for t in transactions if not t.get("payee"))
         logger.info(
             f"Task {task_id}: payees predicted at {time.monotonic() - started:.0f}s ({empty} empty)"
         )
 
         # 3. Classify payees as person/merchant
+        update_task_status(
+            task_id,
+            "processing",
+            stage="classification",
+            stage_index=3,
+            stage_name="Entity Classification (ONNX Qwen3)",
+            progress=72.0,
+            message="Classifying entities as individuals (P2P) vs commercial merchants (P2M)...",
+            total_rows=total_txns,
+            processed_rows=total_txns,
+            elapsed_seconds=round(time.monotonic() - started, 1),
+            eta_seconds=3.0,
+        )
+
         from app.services.merchant_classifier import MerchantClassifierService
 
         classifier = MerchantClassifierService.get_instance()
         payee_targets = [txn.get("payee") or txn.get("particulars", "") for txn in transactions]
-        # Classify each distinct name once. Payees repeat heavily across a
-        # statement (a real 220-row statement had 103), and every ONNX
-        # embedding costs ~0.4s on CPU.
         unique_targets = list(dict.fromkeys(payee_targets))
         by_target = dict(
             zip(unique_targets, classifier.classify_batch(unique_targets), strict=True)
@@ -371,7 +440,21 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
             txn["payee_type"] = cls_result["label"]
             txn["payee_confidence"] = cls_result["confidence"]
 
-        # 4. Enrich merchant payees (Issue #7 / #7b) — cache -> dictionary -> LLM.
+        # 4. Enrich merchant payees (Issue #7 / #7b)
+        update_task_status(
+            task_id,
+            "processing",
+            stage="enrichment",
+            stage_index=3,
+            stage_name="Merchant Taxonomy & Risk Tagging",
+            progress=85.0,
+            message="Evaluating expense taxonomies, essentiality, and financial risk tags...",
+            total_rows=total_txns,
+            processed_rows=total_txns,
+            elapsed_seconds=round(time.monotonic() - started, 1),
+            eta_seconds=2.0,
+        )
+
         merchant_names = [
             txn.get("payee", "") for txn in transactions if txn.get("payee_type") == "merchant"
         ]
@@ -400,10 +483,21 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
                 txn["lifestyle_dim"] = None
                 txn["recurring_type"] = None
 
-        # 5. Score (Track B — Issues #10-#13)
-        # Scoring stays best-effort — a statement too thin to score still
-        # completes with its transactions — but the reason is logged instead of
-        # being swallowed, so "report is null" is diagnosable.
+        # 5. Score (Track B)
+        update_task_status(
+            task_id,
+            "processing",
+            stage="scoring",
+            stage_index=4,
+            stage_name="Alternative Lifestyle Credit Scoring",
+            progress=92.0,
+            message="Computing L1-L6 lifestyle dimensions and 300-900 alternative credit score...",
+            total_rows=total_txns,
+            processed_rows=total_txns,
+            elapsed_seconds=round(time.monotonic() - started, 1),
+            eta_seconds=1.0,
+        )
+
         report = None
         try:
             tx_models = [Transaction(**t) for t in transactions]
@@ -415,15 +509,25 @@ def process_pdf_task(task_id: str, pdf_path: str) -> None:
             logger.exception(f"Task {task_id}: scoring skipped, no report produced")
 
         # 6. Save results to task store
+        total_time = round(time.monotonic() - started, 1)
         report_data = report.model_dump(mode="json") if report else None
         update_task_status(
             task_id,
             "completed",
+            stage="completed",
+            stage_index=4,
+            stage_name="Underwriting Complete",
+            progress=100.0,
+            message=f"Successfully extracted and scored {total_txns} transactions in {total_time}s",
+            total_rows=total_txns,
+            processed_rows=total_txns,
+            elapsed_seconds=total_time,
+            eta_seconds=0.0,
             transactions=transactions,
             report=report_data,
         )
         logger.info(
-            f"Task {task_id}: completed in {time.monotonic() - started:.0f}s,"
+            f"Task {task_id}: completed in {total_time:.1f}s,"
             f" report={'yes' if report else 'none'}"
         )
 

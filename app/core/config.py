@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # local sidecar, so this stays an explicit allow-list rather than a wildcard.
     CORS_ORIGINS: str = os.getenv(
         "CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173,tauri://localhost",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:8080,http://127.0.0.1:8080,tauri://localhost",
     )
     # Optional escape hatch for LAN testing, e.g. r"http://192\.168\.\d+\.\d+:5173"
     CORS_ORIGIN_REGEX: str = os.getenv("CORS_ORIGIN_REGEX", "")

@@ -8,9 +8,19 @@ import anyio
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
 from app.core.config import settings
-from app.schemas.statements import ReportResponse, TaskResponse, TaskStatusResponse
+from app.schemas.statements import (
+    EngineStatsResponse,
+    ReportResponse,
+    TaskResponse,
+    TaskStatusResponse,
+)
 from app.services.extraction import process_pdf_task
-from app.services.task_store import get_task, purge_expired_results, update_task_status
+from app.services.task_store import (
+    get_engine_stats,
+    get_task,
+    purge_expired_results,
+    update_task_status,
+)
 
 router = APIRouter()
 
@@ -36,11 +46,11 @@ async def upload_statement(
     async with await anyio.open_file(file_path, "wb") as f:
         await f.write(content)
 
-    # Initialize task state
-    await asyncio.to_thread(update_task_status, task_id, "pending")
+    # Initialize task state with filename
+    await asyncio.to_thread(update_task_status, task_id, "pending", filename=filename)
 
     # Dispatch background job
-    background_tasks.add_task(process_pdf_task, task_id, file_path)
+    background_tasks.add_task(process_pdf_task, task_id, file_path, filename)
 
     return TaskResponse(
         task_id=task_id,
@@ -49,10 +59,18 @@ async def upload_statement(
     )
 
 
+@router.get("/stats", response_model=EngineStatsResponse)
+async def get_statements_stats() -> EngineStatsResponse:
+    """Returns engine underwriting statistics: total statements processed,
+    total transactions analyzed, average processing turnaround, and recent statements."""
+    data = await asyncio.to_thread(get_engine_stats)
+    return EngineStatsResponse(**data)
+
+
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_processing_status(task_id: str) -> TaskStatusResponse:
     """Extraction page: task status + transactions with payee/merchant
-    classification. Never carries the lifestyle report — see /report."""
+    classification + real-time telemetry."""
     task_data = await asyncio.to_thread(get_task, task_id)
     if not task_data:
         raise HTTPException(status_code=404, detail="Task not found")

@@ -195,12 +195,41 @@ class TaskResponse(BaseModel):
     message: str
 
 
+class StatementSummaryItem(BaseModel):
+    task_id: str
+    status: str
+    filename: str | None = None
+    created_at: float | None = None
+    transaction_count: int = 0
+    score: int | None = None
+    band: str | None = None
+    archetype: str | None = None
+    processing_time_seconds: float | None = None
+
+
+class EngineStatsResponse(BaseModel):
+    total_statements_processed: int
+    total_transactions_analyzed: int
+    avg_processing_time_seconds: float
+    recent_statements: list[StatementSummaryItem] = []
+
+
 class TaskStatusResponse(BaseModel):
     """Extraction-page shape: task status + transactions with payee/merchant
     classification + optional credit risk report if available."""
 
     task_id: str
     status: str
+    stage: str | None = None
+    stage_index: int | None = None
+    stage_name: str | None = None
+    progress: float | None = None
+    message: str | None = None
+    total_rows: int | None = None
+    processed_rows: int | None = None
+    elapsed_seconds: float | None = None
+    eta_seconds: float | None = None
+    current_narration: str | None = None
     transactions: list[Transaction] | None = None
     report: CreditRiskReport | None = None
     error: str | None = None
