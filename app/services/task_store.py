@@ -182,9 +182,7 @@ def get_engine_stats() -> dict[str, Any]:
     recent: list[dict[str, Any]] = []
 
     files = _task_files()
-    sorted_files = sorted(
-        files, key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True
-    )
+    sorted_files = sorted(files, key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
 
     for path in sorted_files:
         try:
@@ -201,17 +199,19 @@ def get_engine_stats() -> dict[str, Any]:
 
             report = data.get("report") or {}
             if len(recent) < 10:
-                recent.append({
-                    "task_id": data.get("task_id", path.stem),
-                    "status": "completed",
-                    "filename": data.get("filename"),
-                    "created_at": path.stat().st_mtime,
-                    "transaction_count": txn_count,
-                    "score": report.get("score"),
-                    "band": report.get("band"),
-                    "archetype": report.get("archetype"),
-                    "processing_time_seconds": round(proc_time, 1) if proc_time else None,
-                })
+                recent.append(
+                    {
+                        "task_id": data.get("task_id", path.stem),
+                        "status": "completed",
+                        "filename": data.get("filename"),
+                        "created_at": path.stat().st_mtime,
+                        "transaction_count": txn_count,
+                        "score": report.get("score"),
+                        "band": report.get("band"),
+                        "archetype": report.get("archetype"),
+                        "processing_time_seconds": round(proc_time, 1) if proc_time else None,
+                    }
+                )
         except Exception:
             continue
 

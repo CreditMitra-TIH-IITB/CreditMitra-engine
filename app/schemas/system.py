@@ -1,4 +1,3 @@
-from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
@@ -6,9 +5,9 @@ class NodeStatus(BaseModel):
     name: str
     status: str = Field("online", description="Status: online, degraded, offline, ready")
     host: str
-    latency_ms: Optional[int] = None
-    details: Optional[str] = None
-    model: Optional[str] = None
+    latency_ms: int | None = None
+    details: str | None = None
+    model: str | None = None
     is_active: bool = True
     capabilities: list[str] = Field(default_factory=list)
 
@@ -26,7 +25,7 @@ class SystemNodesResponse(BaseModel):
 class ConnectionTestRequest(BaseModel):
     component: str = Field(..., description="engine, ollama, or merchant")
     url: str
-    api_key: Optional[str] = None
+    api_key: str | None = None
 
 
 class ConnectionTestResponse(BaseModel):
@@ -38,7 +37,7 @@ class ConnectionTestResponse(BaseModel):
 
 
 class NodeConfigUpdateRequest(BaseModel):
-    ollama_host: Optional[str] = None
-    ollama_model: Optional[str] = None
-    merchant_url: Optional[str] = None
-    merchant_api_key: Optional[str] = None
+    ollama_host: str | None = None
+    ollama_model: str | None = None
+    merchant_url: str | None = None
+    merchant_api_key: str | None = None

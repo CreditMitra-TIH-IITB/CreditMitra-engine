@@ -1,4 +1,5 @@
 import time
+
 import httpx
 from fastapi import APIRouter
 
@@ -45,7 +46,9 @@ async def get_system_nodes() -> SystemNodesResponse:
                 ollama_status = "online"
                 ollama_latency = max(1, int((time.time() - t0) * 1000))
                 models = [m.get("name") for m in resp.json().get("models", [])]
-                if settings.OLLAMA_MODEL in models or any(settings.OLLAMA_MODEL in m for m in models):
+                if settings.OLLAMA_MODEL in models or any(
+                    settings.OLLAMA_MODEL in m for m in models
+                ):
                     ollama_details = f"{settings.OLLAMA_MODEL} loaded"
                 else:
                     ollama_details = f"Active ({len(models)} models ready)"
