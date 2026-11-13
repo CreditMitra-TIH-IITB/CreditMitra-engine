@@ -353,9 +353,7 @@ def process_pdf_task(task_id: str, pdf_path: str, filename: str | None = None) -
         transactions = extract_transactions(pdf_path)
         total_txns = len(transactions)
         extract_elapsed = time.monotonic() - started
-        logger.info(
-            f"Task {task_id}: extracted {total_txns} rows in {extract_elapsed:.1f}s"
-        )
+        logger.info(f"Task {task_id}: extracted {total_txns} rows in {extract_elapsed:.1f}s")
 
         # 2. Enrich via Ollama (payee-lora) with live row-by-row progress & ETA
         update_task_status(
@@ -399,7 +397,10 @@ def process_pdf_task(task_id: str, pdf_path: str, filename: str | None = None) -
                         stage_index=2,
                         stage_name="Payee Normalization (payee-lora)",
                         progress=min(70.0, progress_pct),
-                        message=f"Resolving payees: {rows_done}/{total_txns} rows completed ({rate:.1f} rows/s)",
+                        message=(
+                            f"Resolving payees: {rows_done}/{total_txns} rows completed "
+                            f"({rate:.1f} rows/s)"
+                        ),
                         total_rows=total_txns,
                         processed_rows=rows_done,
                         elapsed_seconds=round(elapsed, 1),
@@ -527,8 +528,7 @@ def process_pdf_task(task_id: str, pdf_path: str, filename: str | None = None) -
             report=report_data,
         )
         logger.info(
-            f"Task {task_id}: completed in {total_time:.1f}s,"
-            f" report={'yes' if report else 'none'}"
+            f"Task {task_id}: completed in {total_time:.1f}s, report={'yes' if report else 'none'}"
         )
 
     except Exception as e:

@@ -70,9 +70,7 @@ app.add_middleware(CORSMiddleware, **_cors_kwargs)
 app.include_router(
     statements.router, prefix=f"{settings.API_V1_STR}/statements", tags=["statements"]
 )
-app.include_router(
-    system.router, prefix=f"{settings.API_V1_STR}/system", tags=["system"]
-)
+app.include_router(system.router, prefix=f"{settings.API_V1_STR}/system", tags=["system"])
 
 
 @app.get("/health")
